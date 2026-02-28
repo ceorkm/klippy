@@ -146,7 +146,7 @@ export const Scene9CTA: React.FC = () => {
         }}
       >
         <span style={{ fontSize: 26, fontFamily: FONTS.mono, color: COLORS.textSecondary }}>
-          github.com/<span style={{ color: COLORS.accent, fontWeight: 700 }}>klippy</span>
+          github.com/<span style={{ color: COLORS.accent, fontWeight: 700 }}>ceorkm/klippy</span>
         </span>
       </div>
       </div>

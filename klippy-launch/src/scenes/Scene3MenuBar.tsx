@@ -94,7 +94,7 @@ const CURSOR_POSITIONS = [
 ];
 
 const CLIPBOARD_ITEMS = [
-  { type: "URL", color: COLORS.purple, text: "https://github.com/klippy-app", time: "Just now" },
+  { type: "URL", color: COLORS.purple, text: "https://github.com/ceorkm/klippy", time: "Just now" },
   { type: "Code", color: COLORS.mint, text: "func handleClipboard() -> Bool {", time: "2m ago" },
   { type: "Email", color: COLORS.green, text: "team@klippy.dev", time: "5m ago" },
   { type: "API Key", color: COLORS.red, text: "sk-proj-a8f3k2nB7x...", time: "12m ago" },
