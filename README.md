@@ -86,7 +86,7 @@ ClipboardItem {
 
 1. **Clone the repository**:
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/ceorkm/klippy.git
    cd klippy
    ```
 
@@ -192,7 +192,7 @@ type:code "function"        # Combined operators
 
 ## License
 
-[Add your license here]
+MIT License. See [LICENSE](LICENSE) for details.
 
 ## Troubleshooting
 
