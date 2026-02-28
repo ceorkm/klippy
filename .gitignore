@@ -1,0 +1,55 @@
+# Xcode
+*.xcuserstate
+*.xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+DerivedData/
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Build artifacts
+build/
+.dmg-build/
+
+# Distribution
+dist/
+
+# Node / Remotion
+klippy-launch/node_modules/
+klippy-launch/dist/
+klippy-launch/out/
+klippy-launch/.remotion/
+
+# Temp / personal
+jjj/
+memoji/
+.playwright-mcp/
+*.mp3
+Screenshot*.png
+scene*.png
+
+# Rendered frames
+klippy-launch/frames/
+klippy-launch/out/
+
+# Source icon files (keep originals in repo root)
+klippy.png
+klippy1.png
+
+# macOS
+.DS_Store
+*.swp
+*~
+.AppleDouble
+.LSOverride
+
+# Environment
+.env
+.env.*

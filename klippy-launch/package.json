@@ -1,0 +1,21 @@
+{
+  "name": "klippy-launch",
+  "version": "1.0.0",
+  "description": "Klippy — Launch Video",
+  "scripts": {
+    "dev": "remotion studio src/index.ts",
+    "build": "remotion render src/index.ts KlippyLaunch out/klippy-launch.mp4",
+    "preview": "remotion preview src/index.ts"
+  },
+  "dependencies": {
+    "@remotion/cli": "^4.0.429",
+    "@remotion/google-fonts": "^4.0.429",
+    "@remotion/media": "^4.0.429",
+    "@remotion/transitions": "^4.0.429",
+    "@types/react": "^19.2.14",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "remotion": "^4.0.429",
+    "typescript": "^5.9.3"
+  }
+}
