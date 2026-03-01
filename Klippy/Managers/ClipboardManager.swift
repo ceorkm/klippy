@@ -173,7 +173,12 @@ class ClipboardManager: ObservableObject {
 
         // PRIORITY 1: Preserve file/document references as real file URLs.
         // Finder often includes an icon image on the pasteboard; file URLs must win.
-        if let fileURLs = readFileURLsFromPasteboard(), !fileURLs.isEmpty {
+        // However, code editors (Electron apps like Cursor/VS Code) put the SOURCE
+        // file's URL on the pasteboard alongside the copied text. When plain text is
+        // present, it's a text copy — not a file copy. Only treat as file when there
+        // is NO plain text on the pasteboard.
+        let hasPlainText = pasteboard.string(forType: .string) != nil
+        if !hasPlainText, let fileURLs = readFileURLsFromPasteboard(), !fileURLs.isEmpty {
             let fileReferences = makeFileReferences(from: fileURLs)
 
             if fileReferences.count == 1,
