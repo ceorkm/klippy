@@ -163,13 +163,34 @@ class ClipboardManager: ObservableObject {
         }
     }
     
+    private func debugLog(_ msg: String) {
+        let logFile = "/tmp/klippy_debug.log"
+        let line = "\(Date()): \(msg)\n"
+        if let data = line.data(using: .utf8) {
+            if FileManager.default.fileExists(atPath: logFile) {
+                let handle = FileHandle(forWritingAtPath: logFile)!
+                handle.seekToEndOfFile()
+                handle.write(data)
+                handle.closeFile()
+            } else {
+                FileManager.default.createFile(atPath: logFile, contents: data)
+            }
+        }
+    }
+
     private func getClipboardContent() -> (
         content: String?,
         imageData: Data?,
         imageSize: NSSize?,
         categoryOverride: ContentCategory?
     ) {
-        print("🔍 Starting clipboard content detection...")
+        debugLog("=== Starting clipboard content detection ===")
+        if let types = pasteboard.types {
+            debugLog("Pasteboard types: \(types.map(\.rawValue))")
+        }
+        debugLog(".string = \(pasteboard.string(forType: .string) ?? "(nil)")")
+        debugLog(".fileURL = \(pasteboard.string(forType: .init("public.file-url")) ?? "(nil)")")
+        debugLog(".html = \(pasteboard.data(forType: .html) != nil ? "present" : "nil")")
 
         // PRIORITY 1: Preserve file/document references as real file URLs.
         // Finder often includes an icon image on the pasteboard; file URLs must win.
@@ -262,10 +283,12 @@ class ClipboardManager: ObservableObject {
 
         // Handle other text-like types (URLs, etc.)
         if let url = pasteboard.string(forType: .URL) {
+            print("⚠️ Fell through to .URL fallback: \(url.prefix(80))")
             return (content: url, imageData: nil, imageSize: nil, categoryOverride: .url)
         }
 
         if let fileURL = pasteboard.string(forType: .fileURL) {
+            print("⚠️ Fell through to .fileURL fallback: \(fileURL.prefix(80))")
             return (content: fileURL, imageData: nil, imageSize: nil, categoryOverride: .file)
         }
 
