@@ -27,8 +27,49 @@ struct KlippyApp: App {
 class PersistenceController {
     static let shared = PersistenceController()
     
+    static func createManagedObjectModel() -> NSManagedObjectModel {
+        let model = NSManagedObjectModel()
+
+        // ClipboardItem entity
+        let clipboardItem = NSEntityDescription()
+        clipboardItem.name = "ClipboardItem"
+        clipboardItem.managedObjectClassName = "ClipboardItem"
+
+        let ciId = NSAttributeDescription(); ciId.name = "id"; ciId.attributeType = .UUIDAttributeType; ciId.isOptional = true
+        let ciContent = NSAttributeDescription(); ciContent.name = "content"; ciContent.attributeType = .stringAttributeType; ciContent.isOptional = true
+        let ciContentHash = NSAttributeDescription(); ciContentHash.name = "contentHash"; ciContentHash.attributeType = .stringAttributeType; ciContentHash.isOptional = true
+        let ciContentType = NSAttributeDescription(); ciContentType.name = "contentType"; ciContentType.attributeType = .integer16AttributeType; ciContentType.isOptional = true; ciContentType.defaultValue = 0
+        let ciCreatedAt = NSAttributeDescription(); ciCreatedAt.name = "createdAt"; ciCreatedAt.attributeType = .dateAttributeType; ciCreatedAt.isOptional = true
+        let ciLastAccessed = NSAttributeDescription(); ciLastAccessed.name = "lastAccessedAt"; ciLastAccessed.attributeType = .dateAttributeType; ciLastAccessed.isOptional = true
+        let ciSearchable = NSAttributeDescription(); ciSearchable.name = "searchableContent"; ciSearchable.attributeType = .stringAttributeType; ciSearchable.isOptional = true
+        let ciSource = NSAttributeDescription(); ciSource.name = "sourceApplication"; ciSource.attributeType = .stringAttributeType; ciSource.isOptional = true
+        let ciTags = NSAttributeDescription(); ciTags.name = "tags"; ciTags.attributeType = .stringAttributeType; ciTags.isOptional = true
+        let ciUsage = NSAttributeDescription(); ciUsage.name = "usageCount"; ciUsage.attributeType = .integer32AttributeType; ciUsage.isOptional = true; ciUsage.defaultValue = 0
+        let ciImageData = NSAttributeDescription(); ciImageData.name = "imageData"; ciImageData.attributeType = .binaryDataAttributeType; ciImageData.isOptional = true; ciImageData.allowsExternalBinaryDataStorage = true
+        let ciImageWidth = NSAttributeDescription(); ciImageWidth.name = "imageWidth"; ciImageWidth.attributeType = .integer32AttributeType; ciImageWidth.isOptional = true; ciImageWidth.defaultValue = 0
+        let ciImageHeight = NSAttributeDescription(); ciImageHeight.name = "imageHeight"; ciImageHeight.attributeType = .integer32AttributeType; ciImageHeight.isOptional = true; ciImageHeight.defaultValue = 0
+        let ciIsImage = NSAttributeDescription(); ciIsImage.name = "isImage"; ciIsImage.attributeType = .booleanAttributeType; ciIsImage.isOptional = true; ciIsImage.defaultValue = false
+
+        clipboardItem.properties = [ciId, ciContent, ciContentHash, ciContentType, ciCreatedAt, ciLastAccessed, ciSearchable, ciSource, ciTags, ciUsage, ciImageData, ciImageWidth, ciImageHeight, ciIsImage]
+
+        // SearchIndex entity
+        let searchIndex = NSEntityDescription()
+        searchIndex.name = "SearchIndex"
+        searchIndex.managedObjectClassName = "SearchIndex"
+
+        let siTerm = NSAttributeDescription(); siTerm.name = "term"; siTerm.attributeType = .stringAttributeType; siTerm.isOptional = true
+        let siTermHash = NSAttributeDescription(); siTermHash.name = "termHash"; siTermHash.attributeType = .stringAttributeType; siTermHash.isOptional = true
+        let siClipId = NSAttributeDescription(); siClipId.name = "clipboardItemID"; siClipId.attributeType = .UUIDAttributeType; siClipId.isOptional = true
+
+        searchIndex.properties = [siTerm, siTermHash, siClipId]
+
+        model.entities = [clipboardItem, searchIndex]
+        return model
+    }
+
     lazy var container: NSPersistentContainer = {
-        let container = NSPersistentContainer(name: "DataModel")
+        let model = PersistenceController.createManagedObjectModel()
+        let container = NSPersistentContainer(name: "DataModel", managedObjectModel: model)
         
         // Configure for high performance with large datasets
         let description = container.persistentStoreDescriptions.first

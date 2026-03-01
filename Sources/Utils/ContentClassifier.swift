@@ -543,19 +543,24 @@ class ContentClassifier {
     
     private func isXML(_ content: String) -> Bool {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        
+
         // Check for XML declaration or root element
         if trimmed.hasPrefix("<?xml") ||
            (trimmed.hasPrefix("<") && trimmed.hasSuffix(">") && trimmed.contains("</")) {
-            
+
             // Basic XML validation
             let openTags = content.components(separatedBy: "<").count - 1
             let closeTags = content.components(separatedBy: "</").count - 1
-            
+
             // Should have roughly matching open/close tags
             return abs(openTags - closeTags * 2) <= 2
         }
-        
+
+        // Self-closing XML tags like <add key="foo" />
+        if trimmed.hasPrefix("<") && trimmed.hasSuffix("/>") {
+            return true
+        }
+
         return false
     }
     

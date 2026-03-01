@@ -19,7 +19,8 @@ let package = Package(
         .executableTarget(
             name: "Klippy",
             dependencies: [],
-            path: "Sources"
+            path: "Sources",
+            exclude: ["DataModel.xcdatamodeld"]
         ),
         .testTarget(
             name: "KlippyTests",
