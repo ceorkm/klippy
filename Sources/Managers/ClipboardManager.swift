@@ -218,7 +218,41 @@ class ClipboardManager: ObservableObject {
                 print("🔍 Text looks like image filename but no image data found: \(string)")
             }
 
+            // Guard against HTML-stripped text from Electron apps (e.g. Cursor).
+            // When the plain text is suspiciously short but HTML is available,
+            // the app likely put HTML on the pasteboard and the plain text was
+            // derived by stripping tags — which nukes XML/HTML-like content.
+            let htmlType = NSPasteboard.PasteboardType.html
+            if string.trimmingCharacters(in: .whitespacesAndNewlines).count < 4,
+               let htmlData = pasteboard.data(forType: htmlType),
+               let attrString = NSAttributedString(
+                   html: htmlData,
+                   options: [.characterEncoding: String.Encoding.utf8.rawValue],
+                   documentAttributes: nil
+               ) {
+                let recovered = attrString.string.trimmingCharacters(in: .whitespacesAndNewlines)
+                if recovered.count > string.count {
+                    print("🔧 Recovered longer text from HTML pasteboard: \(recovered.prefix(50))...")
+                    return (content: recovered, imageData: nil, imageSize: nil, categoryOverride: nil)
+                }
+            }
+
             return (content: string, imageData: nil, imageSize: nil, categoryOverride: nil)
+        }
+
+        // PRIORITY 5: Try HTML pasteboard when plain text is absent.
+        let htmlType = NSPasteboard.PasteboardType.html
+        if let htmlData = pasteboard.data(forType: htmlType),
+           let attrString = NSAttributedString(
+               html: htmlData,
+               options: [.characterEncoding: String.Encoding.utf8.rawValue],
+               documentAttributes: nil
+           ) {
+            let text = attrString.string.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty {
+                print("📝 Recovered text from HTML pasteboard: \(text.prefix(50))...")
+                return (content: text, imageData: nil, imageSize: nil, categoryOverride: nil)
+            }
         }
 
         // Handle other text-like types (URLs, etc.)
