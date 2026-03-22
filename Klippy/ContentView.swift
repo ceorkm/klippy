@@ -350,7 +350,7 @@ struct ContentView: View {
     }
 
     private var categoryFilterOrder: [ContentCategory] {
-        let prioritized: [ContentCategory] = [.all, .text, .url, .image, .file, .apiKey, .paymentCard]
+        let prioritized: [ContentCategory] = [.all, .text, .url, .image, .file, .ipAddress, .apiKey, .paymentCard]
         let remaining = ContentCategory.allCases.filter { !prioritized.contains($0) }
         return prioritized + remaining
     }
