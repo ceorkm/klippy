@@ -26,6 +26,8 @@ enum ContentCategory: Int16, CaseIterable {
     case tiktokURL = 17
     case apiKey = 18
     case paymentCard = 19
+    case ipAddress = 20
+    case identifier = 21
     case other = 99
     
     var displayName: String {
@@ -50,6 +52,8 @@ enum ContentCategory: Int16, CaseIterable {
         case .tiktokURL: return "TikTok URLs"
         case .apiKey: return "API Keys"
         case .paymentCard: return "Payment Cards"
+        case .ipAddress: return "IP Addresses"
+        case .identifier: return "Identifiers"
         case .other: return "Other"
         }
     }
@@ -76,6 +80,8 @@ enum ContentCategory: Int16, CaseIterable {
         case .tiktokURL: return "music.note"
         case .apiKey: return "key.fill"
         case .paymentCard: return "creditcard.fill"
+        case .ipAddress: return "network"
+        case .identifier: return "barcode"
         case .other: return "questionmark.circle"
         }
     }
@@ -102,6 +108,8 @@ enum ContentCategory: Int16, CaseIterable {
         case .tiktokURL: return .red
         case .apiKey: return .mint
         case .paymentCard: return .green
+        case .ipAddress: return .teal
+        case .identifier: return .cyan
         case .other: return .secondary
         }
     }
