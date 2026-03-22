@@ -102,9 +102,31 @@ class ContentClassifier {
             pattern: #"(?:[a-zA-Z]:\\|/)[^\s<>:"|?*]+\.[a-zA-Z0-9]+"#,
             options: []
         )
-        
+
         static let fileName = try! NSRegularExpression(
             pattern: #"[a-zA-Z0-9_.-]+\.[a-zA-Z0-9]{1,10}\b"#,
+            options: []
+        )
+
+        // IP address patterns
+        static let ipv4 = try! NSRegularExpression(
+            pattern: #"\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)(?:/\d{1,2})?\b"#,
+            options: []
+        )
+
+        static let ipv6 = try! NSRegularExpression(
+            pattern: #"(?i)\b(?:[0-9a-f]{1,4}:){2,7}[0-9a-f]{1,4}\b|::(?:[0-9a-f]{1,4}:){0,5}[0-9a-f]{1,4}\b|(?:[0-9a-f]{1,4}:){1,6}::[0-9a-f]{0,4}\b"#,
+            options: []
+        )
+
+        // Identifier patterns
+        static let uuid = try! NSRegularExpression(
+            pattern: #"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"#,
+            options: []
+        )
+
+        static let shaHash = try! NSRegularExpression(
+            pattern: #"\b[0-9a-fA-F]{40,64}\b"#,
             options: []
         )
         
@@ -206,8 +228,10 @@ class ContentClassifier {
         if isTikTokURL(trimmedContent) { return .tiktokURL }
         if isSocialMediaURL(trimmedContent) { return .socialMedia }
         if isURL(trimmedContent) { return .url }
+        if isIPAddress(trimmedContent) { return .ipAddress }
         if isPhoneNumber(trimmedContent) { return .phone }
         if isAddress(trimmedContent) { return .address }
+        if isIdentifier(trimmedContent) { return .identifier }
         if isCode(trimmedContent) { return .code }
         if isNumber(trimmedContent) { return .number }
         if isDate(trimmedContent) { return .date }
@@ -377,19 +401,101 @@ class ContentClassifier {
                Patterns.rgbColor.firstMatch(in: content, range: NSRange(content.startIndex..., in: content)) != nil
     }
     
+    private func isIPAddress(_ content: String) -> Bool {
+        let range = NSRange(content.startIndex..., in: content)
+
+        let ipv4Matches = Patterns.ipv4.matches(in: content, range: range)
+        if let match = ipv4Matches.first {
+            let coverage = Double(match.range.length) / Double(max(content.count, 1))
+            if coverage > 0.7 { return true }
+        }
+
+        let ipv6Matches = Patterns.ipv6.matches(in: content, range: range)
+        if let match = ipv6Matches.first {
+            let coverage = Double(match.range.length) / Double(max(content.count, 1))
+            if coverage > 0.7 { return true }
+        }
+
+        return false
+    }
+
+    private func isIdentifier(_ content: String) -> Bool {
+        let range = NSRange(content.startIndex..., in: content)
+
+        if let match = Patterns.uuid.firstMatch(in: content, range: range) {
+            let coverage = Double(match.range.length) / Double(max(content.count, 1))
+            if coverage > 0.8 { return true }
+        }
+
+        if let match = Patterns.shaHash.firstMatch(in: content, range: range) {
+            let coverage = Double(match.range.length) / Double(max(content.count, 1))
+            if coverage > 0.8 { return true }
+        }
+
+        return false
+    }
+
+    private static let knownFileExtensions: Set<String> = [
+        // Programming languages
+        "swift", "m", "h", "c", "cpp", "cc", "cxx", "cs", "java", "kt", "kts",
+        "py", "rb", "rs", "go", "js", "jsx", "ts", "tsx", "mjs", "cjs",
+        "php", "pl", "pm", "r", "scala", "clj", "ex", "exs", "erl", "hs",
+        "lua", "dart", "v", "zig", "nim", "cr", "jl", "f90", "f95",
+        // Web / markup / config
+        "html", "htm", "css", "scss", "sass", "less", "vue", "svelte",
+        "xml", "xsl", "xsd", "json", "yaml", "yml", "toml", "ini", "cfg",
+        "plist", "csv", "tsv",
+        // Shell / scripting
+        "sh", "bash", "zsh", "fish", "bat", "cmd", "ps1", "psm1",
+        // Documents
+        "md", "markdown", "txt", "rtf", "tex", "pdf", "doc", "docx",
+        "xls", "xlsx", "ppt", "pptx", "pages", "numbers", "key",
+        // Images
+        "png", "jpg", "jpeg", "gif", "bmp", "tiff", "tif", "webp", "svg",
+        "ico", "heic", "heif", "raw", "psd", "ai", "eps",
+        // Audio / Video
+        "mp3", "wav", "aac", "flac", "ogg", "m4a", "wma",
+        "mp4", "mov", "avi", "mkv", "wmv", "flv", "webm",
+        // Archives
+        "zip", "tar", "gz", "bz2", "xz", "rar", "7z", "dmg", "iso",
+        // Executables / libraries
+        "app", "exe", "dll", "so", "dylib", "o", "a", "framework",
+        // Data / databases
+        "sql", "db", "sqlite", "sqlite3", "mdb",
+        // Other common
+        "log", "lock", "env", "bak", "tmp", "swp",
+    ]
+
     private func isFilePath(_ content: String) -> Bool {
         if Patterns.filePath.firstMatch(in: content, range: NSRange(content.startIndex..., in: content)) != nil {
             return true
         }
-        
+
         // Check for simple file names
         let matches = Patterns.fileName.matches(in: content, range: NSRange(content.startIndex..., in: content))
         if let match = matches.first, matches.count == 1 {
             let matchLength = match.range.length
             let contentLength = max(content.count, 1)
-            return Double(matchLength) / Double(contentLength) > 0.8
+            guard Double(matchLength) / Double(contentLength) > 0.8 else { return false }
+
+            guard let matchRange = Range(match.range, in: content) else { return false }
+            let matched = String(content[matchRange])
+
+            // Reject all-numeric dotted patterns (e.g. IP addresses like 95.111.111.111)
+            let withoutDots = matched.replacingOccurrences(of: ".", with: "")
+            if withoutDots.allSatisfy({ $0.isNumber || $0 == "/" }) {
+                return false
+            }
+
+            // Only accept known file extensions
+            if let dotIndex = matched.lastIndex(of: ".") {
+                let ext = String(matched[matched.index(after: dotIndex)...]).lowercased()
+                return Self.knownFileExtensions.contains(ext)
+            }
+
+            return false
         }
-        
+
         return false
     }
     
@@ -543,19 +649,24 @@ class ContentClassifier {
     
     private func isXML(_ content: String) -> Bool {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        
+
         // Check for XML declaration or root element
         if trimmed.hasPrefix("<?xml") ||
            (trimmed.hasPrefix("<") && trimmed.hasSuffix(">") && trimmed.contains("</")) {
-            
+
             // Basic XML validation
             let openTags = content.components(separatedBy: "<").count - 1
             let closeTags = content.components(separatedBy: "</").count - 1
-            
+
             // Should have roughly matching open/close tags
             return abs(openTags - closeTags * 2) <= 2
         }
-        
+
+        // Self-closing XML tags like <add key="foo" />
+        if trimmed.hasPrefix("<") && trimmed.hasSuffix("/>") {
+            return true
+        }
+
         return false
     }
     
