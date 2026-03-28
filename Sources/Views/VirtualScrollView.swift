@@ -54,6 +54,7 @@ struct VirtualClipboardItemRow: View {
     var onCopied: (() -> Void)? = nil
     var onDeleted: (() -> Void)? = nil
     var onFavoriteToggled: ((Bool) -> Void)? = nil
+    var onSaveSnippet: (() -> Void)? = nil
     @State private var isHovered = false
     @AppStorage("klippy.ui.textSize") private var textSize: Double = 16
 
@@ -139,6 +140,12 @@ struct VirtualClipboardItemRow: View {
 
             Button(isFavorite ? "Unpin" : "Pin") {
                 toggleFavorite()
+            }
+
+            if !item.isImage {
+                Button("Save") {
+                    onSaveSnippet?()
+                }
             }
 
             Button("Delete") {

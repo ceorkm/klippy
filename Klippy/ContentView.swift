@@ -7,6 +7,7 @@ struct ContentView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @StateObject private var clipboardManager = ClipboardManager.shared
     @StateObject private var searchEngine = SearchEngine()
+    @StateObject private var snippetManager = SnippetManager.shared
 
     @State private var searchText = ""
     @State private var selectedCategory: ContentCategory = .all
@@ -15,6 +16,12 @@ struct ContentView: View {
     @State private var customRangeStartDate = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
     @State private var customRangeEndDate = Date()
     @State private var showingSettings = false
+    @State private var showingSaved = false
+    @State private var showingSnippetEditor = false
+    @State private var editingSnippet: SavedSnippetViewModel? = nil
+    @State private var showingSavePopover = false
+    @State private var snippetSaveTitle = ""
+    @State private var snippetSaveContent = ""
     @State private var showingSpotPanel = false
     @State private var spotQuery = ""
     @State private var isDropTargeted = false
@@ -46,11 +53,57 @@ struct ContentView: View {
 
             VStack(spacing: 10) {
                 headerCard(resultCount: items.count)
-                categoryStrip
-                listCard(items: items)
+                if showingSaved {
+                    savedSnippetsCard
+                } else {
+                    categoryStrip
+                    listCard(items: items)
+                }
                 footerBar(resultCount: items.count)
             }
             .padding(10)
+
+            if showingSavePopover {
+                Color.black.opacity(0.16)
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        showingSavePopover = false
+                    }
+                    .transition(.opacity)
+
+                VStack(spacing: 10) {
+                    Text("Save")
+                        .font(.headline)
+
+                    TextField("Name (optional)", text: $snippetSaveTitle)
+                        .textFieldStyle(.roundedBorder)
+
+                    HStack {
+                        Button("Cancel") {
+                            showingSavePopover = false
+                        }
+                        Spacer()
+                        Button("Save") {
+                            let trimmed = snippetSaveTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                            let title = trimmed.isEmpty ? String(snippetSaveContent.prefix(40)) : trimmed
+                            snippetManager.createSnippet(title: title, content: snippetSaveContent)
+                            showingSavePopover = false
+                            showToast("Saved", symbol: "bookmark.fill")
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+                .padding(16)
+                .frame(width: 300)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.primary.opacity(0.12), lineWidth: 0.5)
+                )
+                .shadow(color: Color.black.opacity(0.22), radius: 18, x: 0, y: 10)
+                .transition(.scale(scale: 0.96).combined(with: .opacity))
+                .zIndex(5)
+            }
 
             if showingSpotPanel {
                 Color.black.opacity(0.16)
@@ -85,13 +138,24 @@ struct ContentView: View {
         .animation(.easeInOut(duration: 0.16), value: selectedDateFilter)
         .animation(.easeInOut(duration: 0.16), value: customRangeStartDate)
         .animation(.easeInOut(duration: 0.16), value: customRangeEndDate)
+        .animation(.easeInOut(duration: 0.16), value: showingSavePopover)
+        .animation(.easeInOut(duration: 0.16), value: showingSaved)
         .animation(.easeInOut(duration: 0.16), value: showingSpotPanel)
         .popover(isPresented: $showingSettings) {
             SettingsView()
-                .frame(width: 340, height: 240)
         }
         .sheet(isPresented: $showingCustomDateRangePicker) {
             customDateRangeEditor
+        }
+        .popover(isPresented: $showingSnippetEditor) {
+            SnippetEditorView(
+                snippet: editingSnippet
+            ) { title, content in
+                if let existing = editingSnippet {
+                    snippetManager.updateSnippet(id: existing.id, title: title, content: content)
+                }
+                editingSnippet = nil
+            }
         }
         .onAppear {
             clipboardManager.refreshHistory()
@@ -128,6 +192,15 @@ struct ContentView: View {
                 Spacer()
 
                 HStack(spacing: 6) {
+                    topIconButton(
+                        systemName: showingSaved ? "bookmark.fill" : "bookmark",
+                        helpText: showingSaved ? "Show History" : "Saved"
+                    ) {
+                        withAnimation(.easeInOut(duration: 0.16)) {
+                            showingSaved.toggle()
+                        }
+                    }
+
                     topIconButton(systemName: "gearshape.fill", helpText: "Settings") {
                         showingSettings.toggle()
                     }
@@ -142,9 +215,12 @@ struct ContentView: View {
                 Image(systemName: "magnifyingglass")
                     .foregroundColor(.secondary)
 
-                TextField("Search clipboard history", text: $searchText)
+                TextField(showingSaved ? "Search saved items" : "Search clipboard history", text: $searchText)
                     .textFieldStyle(.plain)
                     .focused($isSearchFieldFocused)
+                    .onTapGesture {
+                        isSearchFieldFocused = true
+                    }
 
                 if !searchText.isEmpty {
                     Button {
@@ -272,6 +348,11 @@ struct ContentView: View {
                         },
                         onFavoriteToggled: { isNowFavorite in
                             showToast(isNowFavorite ? "Pinned item" : "Unpinned item", symbol: isNowFavorite ? "star.fill" : "star")
+                        },
+                        onSaveSnippet: {
+                            snippetSaveContent = item.content
+                            snippetSaveTitle = ""
+                            showingSavePopover = true
                         }
                     )
                 }
@@ -354,6 +435,123 @@ struct ContentView: View {
         let remaining = ContentCategory.allCases.filter { !prioritized.contains($0) }
         return prioritized + remaining
     }
+
+    private var savedSnippetsCard: some View {
+        Group {
+            let results = snippetManager.filteredSnippets(query: searchText)
+            if results.isEmpty {
+                VStack(spacing: 10) {
+                    Image(systemName: searchText.isEmpty ? "bookmark" : "magnifyingglass.circle")
+                        .font(.system(size: 28, weight: .medium))
+                        .foregroundColor(.secondary)
+
+                    Text(searchText.isEmpty ? "No Saved Items" : "No Results")
+                        .font(.headline)
+
+                    Text(searchText.isEmpty
+                         ? "Right-click any clipboard item and tap \"Save\" to keep it here."
+                         : "Try another search term.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 280)
+                }
+                .padding(20)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                VirtualScrollView(
+                    items: results,
+                    itemHeight: listRowHeight
+                ) { snippet in
+                    savedSnippetRow(snippet)
+                }
+                .padding(8)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func savedSnippetRow(_ snippet: SavedSnippetViewModel) -> some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "bookmark.fill")
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(.orange)
+                    .font(.system(size: 19, weight: .semibold))
+                    .frame(width: 42, height: 42)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    if !snippet.title.isEmpty && snippet.title != String(snippet.content.prefix(40)) {
+                        Text(snippet.title)
+                            .font(.system(size: max(11, CGFloat(min(max(textSize, 13), 24)) - 3), weight: .medium))
+                            .foregroundColor(.orange)
+                            .lineLimit(1)
+                    }
+
+                    Text(snippet.displayContent)
+                        .lineLimit(3)
+                        .font(.system(size: CGFloat(min(max(textSize, 13), 24)), weight: .semibold))
+                        .multilineTextAlignment(.leading)
+                        .foregroundColor(.primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                VStack(alignment: .trailing, spacing: 8) {
+                    VStack(alignment: .trailing, spacing: 1) {
+                        Text(Self.savedDateFormatter.string(from: snippet.createdAt))
+                            .font(.system(size: max(10, CGFloat(min(max(textSize, 13), 24)) - 4), weight: .semibold))
+                            .foregroundColor(.secondary)
+                            .monospacedDigit()
+                    }
+
+                    Button {
+                        snippetManager.deleteSnippet(id: snippet.id)
+                        showToast("Removed", symbol: "trash")
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Delete")
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+
+            Divider()
+                .overlay(Color.primary.opacity(0.14))
+                .padding(.leading, 12)
+                .padding(.trailing, 6)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            snippetManager.copySnippetToClipboard(snippet)
+            showToast("Copied", symbol: "checkmark.circle.fill")
+        }
+        .contextMenu {
+            Button("Copy") {
+                snippetManager.copySnippetToClipboard(snippet)
+                showToast("Copied", symbol: "checkmark.circle.fill")
+            }
+
+            Button("Rename") {
+                editingSnippet = snippet
+                showingSnippetEditor = true
+            }
+
+            Button("Delete") {
+                snippetManager.deleteSnippet(id: snippet.id)
+                showToast("Removed", symbol: "trash")
+            }
+        }
+    }
+
+    private static let savedDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "MMM d"
+        return f
+    }()
 
     private var filteredItems: [ClipboardItemViewModel] {
         let results = searchEngine.search(
@@ -880,81 +1078,132 @@ private struct ToastView: View {
 
 struct SettingsView: View {
     @AppStorage("klippy.ui.textSize") private var textSize: Double = 16
+    @State private var showClearConfirm = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Settings")
-                .font(.headline)
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Storage")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-
-                HStack {
-                    Text("Max items:")
-                    Spacer()
-                    Text("Unlimited")
-                        .foregroundColor(.secondary)
-                }
-
-                HStack {
-                    Text("Current items:")
-                    Spacer()
-                    Text("\(ClipboardManager.shared.totalItemCount)")
-                        .foregroundColor(.secondary)
-                }
+        VStack(spacing: 14) {
+            // Storage
+            settingsSection(title: "Storage", icon: "internaldrive.fill") {
+                settingsRow(label: "Saved items", value: "\(ClipboardManager.shared.totalItemCount)")
+                settingsRow(label: "Limit", value: "Unlimited")
             }
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Appearance")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-
+            // Appearance
+            settingsSection(title: "Appearance", icon: "textformat.size") {
                 HStack {
-                    Text("Text size:")
+                    Text("Text size")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                     Spacer()
                     Text("\(Int(textSize)) pt")
-                        .foregroundColor(.secondary)
-                        .monospacedDigit()
+                        .font(.system(.caption, design: .monospaced))
+                        .fontWeight(.semibold)
                 }
 
                 Slider(value: $textSize, in: 13...24, step: 1)
+                    .tint(.orange)
 
-                HStack(spacing: 8) {
-                    Button("A-") {
-                        textSize = max(13, textSize - 1)
-                    }
-                    .buttonStyle(.bordered)
-
-                    Button("A+") {
-                        textSize = min(24, textSize + 1)
-                    }
-                    .buttonStyle(.bordered)
-
-                    Button("Reset") {
-                        textSize = 16
-                    }
-                    .buttonStyle(.bordered)
+                HStack(spacing: 6) {
+                    settingsButton("A-") { textSize = max(13, textSize - 1) }
+                    settingsButton("A+") { textSize = min(24, textSize + 1) }
+                    settingsButton("Reset") { textSize = 16 }
                 }
             }
 
-            Button("Export JSON") {
-                ClipboardManager.shared.exportHistoryAsJSON()
-            }
-            .buttonStyle(.bordered)
-
-            Spacer()
-
-            HStack {
-                Spacer()
-                Button("Clear All") {
-                    ClipboardManager.shared.clearAllItems()
+            // Actions
+            HStack(spacing: 8) {
+                Button {
+                    ClipboardManager.shared.exportHistoryAsJSON()
+                } label: {
+                    Label("Export JSON", systemImage: "arrow.down.doc")
+                        .font(.caption)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
                 }
-                .foregroundColor(.red)
+                .buttonStyle(.bordered)
+
+                Button {
+                    showClearConfirm = true
+                } label: {
+                    Label("Clear All", systemImage: "trash")
+                        .font(.caption)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
+                }
+                .buttonStyle(.bordered)
+                .tint(.red)
             }
         }
-        .padding()
+        .padding(16)
+        .frame(width: 300)
+        .alert("Clear All History?", isPresented: $showClearConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Clear All", role: .destructive) {
+                ClipboardManager.shared.clearAllItems()
+            }
+        } message: {
+            Text("This will permanently delete all \(ClipboardManager.shared.totalItemCount) clipboard items. This cannot be undone.")
+        }
+    }
+
+    private func settingsSection<Content: View>(
+        title: String,
+        icon: String,
+        tint: Color = .orange,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.caption2)
+                    .foregroundColor(tint)
+                Text(title)
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.secondary)
+                    .textCase(.uppercase)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                content()
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color.primary.opacity(0.06), lineWidth: 0.5)
+            )
+        }
+    }
+
+    private func settingsRow(label: String, value: String) -> some View {
+        HStack {
+            Text(label)
+                .font(.caption)
+                .foregroundColor(.secondary)
+            Spacer()
+            Text(value)
+                .font(.system(.caption, design: .monospaced))
+                .fontWeight(.semibold)
+                .foregroundColor(.primary)
+        }
+    }
+
+    private func settingsButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption)
+                .fontWeight(.medium)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(Color.primary.opacity(0.1), lineWidth: 0.5)
+                )
+        }
+        .buttonStyle(.plain)
     }
 }
 
