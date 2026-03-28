@@ -63,7 +63,21 @@ class PersistenceController {
 
         searchIndex.properties = [siTerm, siTermHash, siClipId]
 
-        model.entities = [clipboardItem, searchIndex]
+        // SavedSnippet entity
+        let savedSnippet = NSEntityDescription()
+        savedSnippet.name = "SavedSnippet"
+        savedSnippet.managedObjectClassName = "SavedSnippet"
+
+        let ssId = NSAttributeDescription(); ssId.name = "id"; ssId.attributeType = .UUIDAttributeType; ssId.isOptional = true
+        let ssTitle = NSAttributeDescription(); ssTitle.name = "title"; ssTitle.attributeType = .stringAttributeType; ssTitle.isOptional = true
+        let ssContent = NSAttributeDescription(); ssContent.name = "content"; ssContent.attributeType = .stringAttributeType; ssContent.isOptional = true
+        let ssCreatedAt = NSAttributeDescription(); ssCreatedAt.name = "createdAt"; ssCreatedAt.attributeType = .dateAttributeType; ssCreatedAt.isOptional = true
+        let ssUpdatedAt = NSAttributeDescription(); ssUpdatedAt.name = "updatedAt"; ssUpdatedAt.attributeType = .dateAttributeType; ssUpdatedAt.isOptional = true
+        let ssSortOrder = NSAttributeDescription(); ssSortOrder.name = "sortOrder"; ssSortOrder.attributeType = .integer32AttributeType; ssSortOrder.isOptional = true; ssSortOrder.defaultValue = 0
+
+        savedSnippet.properties = [ssId, ssTitle, ssContent, ssCreatedAt, ssUpdatedAt, ssSortOrder]
+
+        model.entities = [clipboardItem, searchIndex, savedSnippet]
         return model
     }
 

@@ -16,6 +16,14 @@
         <attribute name="tags" optional="YES" attributeType="String"/>
         <attribute name="usageCount" optional="YES" attributeType="Integer 32" defaultValue="0" usesScalarValueType="YES"/>
     </entity>
+    <entity name="SavedSnippet" representedClassName="SavedSnippet" syncable="YES" codeGenerationType="category">
+        <attribute name="content" optional="YES" attributeType="String"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="sortOrder" optional="YES" attributeType="Integer 32" defaultValue="0" usesScalarValueType="YES"/>
+        <attribute name="title" optional="YES" attributeType="String"/>
+        <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+    </entity>
     <entity name="SearchIndex" representedClassName="SearchIndex" syncable="YES" codeGenerationType="class">
         <attribute name="clipboardItemID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="term" optional="YES" attributeType="String"/>
