@@ -466,9 +466,27 @@ class ContentClassifier {
         "log", "lock", "env", "bak", "tmp", "swp",
     ]
 
+    private static let commandPrefixes: Set<String> = [
+        "nano", "vim", "vi", "nvim", "emacs", "code", "subl", "cat", "less", "more",
+        "head", "tail", "grep", "rg", "find", "ls", "rm", "cp", "mv", "mkdir",
+        "touch", "chmod", "chown", "curl", "wget", "ssh", "scp", "rsync",
+        "open", "sudo", "cd", "source", "export", "echo", "python", "python3",
+        "node", "ruby", "swift", "go", "cargo", "npm", "npx", "yarn", "pnpm",
+        "git", "docker", "kubectl", "brew", "pip", "pip3", "gem", "pod",
+        "xcodebuild", "xcrun", "make", "cmake", "gcc", "clang",
+    ]
+
     private func isFilePath(_ content: String) -> Bool {
-        if Patterns.filePath.firstMatch(in: content, range: NSRange(content.startIndex..., in: content)) != nil {
-            return true
+        // Reject if content starts with a known CLI command
+        let firstWord = content.prefix(while: { !$0.isWhitespace }).lowercased()
+        if Self.commandPrefixes.contains(firstWord) {
+            return false
+        }
+
+        if let match = Patterns.filePath.firstMatch(in: content, range: NSRange(content.startIndex..., in: content)) {
+            // Only classify as file if the path dominates the content
+            let coverage = Double(match.range.length) / Double(max(content.count, 1))
+            if coverage > 0.7 { return true }
         }
 
         // Check for simple file names
