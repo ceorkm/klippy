@@ -98,9 +98,12 @@ class SearchEngine: ObservableObject {
             return cachedResult.results
         }
 
-        // Empty query uses recent-memory cache for low-latency browsing
+        // Empty query with no filters uses recent-memory cache for low-latency browsing.
+        // For specific category filters, always query the database so rare categories
+        // (API keys, payment cards, etc.) beyond the cache window are discoverable.
         if (searchQuery.text.isEmpty || searchQuery.text.count < SearchConfig.minQueryLength) &&
-            searchQuery.dateRange == nil {
+            searchQuery.dateRange == nil &&
+            searchQuery.category == .all {
             return ClipboardManager.shared.getItemsFromCache(
                 matching: searchQuery.text,
                 category: searchQuery.category,
