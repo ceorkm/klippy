@@ -302,6 +302,7 @@ class ContentClassifier {
     
     private func isCode(_ content: String) -> Bool {
         let range = NSRange(content.startIndex..., in: content)
+        let isMultiline = content.contains("\n")
 
         // Code block markers (``` fences) are a strong signal
         if Patterns.codeBlock.firstMatch(in: content, range: range) != nil {
@@ -377,6 +378,38 @@ class ContentClassifier {
         // Short function snippets are common clipboard code; treat as code when paired with braces/semicolon.
         let hasFunctionKeyword = content.range(of: #"\b(?:function|func|def)\b"#, options: .regularExpression) != nil
         if hasFunctionKeyword && (bracePairs >= 1 || content.contains(";")) { score += 2 }
+
+        // PHP tags are a strong signal even in short snippets.
+        let hasPHPTags = content.contains("<?php") || content.contains("<?") || content.contains("?>")
+        if hasPHPTags { score += 2 }
+
+        // Shebangs strongly indicate executable script content.
+        let hasShebang = content.range(of: #"(?m)^#!\/\S+"#, options: .regularExpression) != nil
+        if hasShebang { score += 2 }
+
+        // Import/include-style statements at start of line are common in code, uncommon in prose.
+        let hasImportLikeStatement = content.range(
+            of: #"(?m)^\s*(?:import|require|include|use)\b"#,
+            options: .regularExpression
+        ) != nil
+        if hasImportLikeStatement { score += 1 }
+
+        // Short single-line snippets like header("..."); should score as code.
+        let hasSingleLineSemicolonFunctionCall = !isMultiline &&
+            content.contains(";") &&
+            content.range(of: #"\b[A-Za-z_][A-Za-z0-9_]*\s*\([^)]*\)\s*;"#, options: .regularExpression) != nil
+        if hasSingleLineSemicolonFunctionCall { score += 2 }
+
+        // PHP/Bash-style variable syntax is a useful signal for tiny snippets.
+        let hasDollarVariable = content.range(of: #"\$[A-Za-z_][A-Za-z0-9_]*"#, options: .regularExpression) != nil
+        if hasDollarVariable { score += 1 }
+
+        // Control/output keywords paired with parens or braces help distinguish code from file-like text.
+        let hasControlKeywordSyntax = content.range(
+            of: #"\b(?:echo|print|return|if|else|for|while)\b\s*(?:\(|\{)"#,
+            options: .regularExpression
+        ) != nil
+        if hasControlKeywordSyntax { score += 2 }
 
         return score >= 2
     }
@@ -480,6 +513,28 @@ class ContentClassifier {
         // Reject if content starts with a known CLI command
         let firstWord = content.prefix(while: { !$0.isWhitespace }).lowercased()
         if Self.commandPrefixes.contains(firstWord) {
+            return false
+        }
+
+        let isMultiline = content.contains("\n")
+        let hasSemicolon = content.contains(";")
+        let hasBraces = content.contains("{") || content.contains("}")
+        let hasParens = content.contains("(") || content.contains(")")
+
+        // Short-circuit obvious code-like snippets before filename regexes can match embedded names.
+        if content.contains("<?") || content.contains("#!/") {
+            return false
+        }
+
+        if hasSemicolon && hasBraces {
+            return false
+        }
+
+        if content.contains("$(") || content.contains("=>") {
+            return false
+        }
+
+        if isMultiline && (hasSemicolon || hasBraces || hasParens) {
             return false
         }
 
