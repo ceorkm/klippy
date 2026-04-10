@@ -38,10 +38,10 @@ class SnippetManager: ObservableObject {
         }
     }
 
-    func createSnippet(title: String, content: String) {
+    func createSnippet(title: String, content: String, isMerged: Bool = false) {
         let context = backgroundContext
         context.performAndWait {
-            _ = SavedSnippet.create(title: title, content: content, context: context)
+            _ = SavedSnippet.create(title: title, content: content, isMerged: isMerged, context: context)
             do {
                 try context.save()
             } catch {

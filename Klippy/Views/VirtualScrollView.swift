@@ -55,6 +55,12 @@ struct VirtualClipboardItemRow: View {
     var onDeleted: (() -> Void)? = nil
     var onFavoriteToggled: ((Bool) -> Void)? = nil
     var onSaveSnippet: (() -> Void)? = nil
+    var isMergePending: Bool = false
+    var hasMergePending: Bool = false
+    var onMergeSelect: (() -> Void)? = nil
+    var onMergeCombine: (() -> Void)? = nil
+    var onMergeCancel: (() -> Void)? = nil
+    var onOpenMerged: (() -> Void)? = nil
     @State private var isHovered = false
     @AppStorage("klippy.ui.textSize") private var textSize: Double = 16
 
@@ -72,6 +78,15 @@ struct VirtualClipboardItemRow: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
 
                     HStack(spacing: 6) {
+                        if item.isMergedClip {
+                            Text("MERGED")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(Color.orange, in: Capsule())
+                        }
+
                         if let sourceApplication = item.sourceApplication, !sourceApplication.isEmpty {
                             Text(sourceApplication)
                                 .font(.system(size: metadataTextSize))
@@ -116,7 +131,18 @@ struct VirtualClipboardItemRow: View {
                 .padding(.leading, 12)
                 .padding(.trailing, 6)
         }
-        .background(Color.primary.opacity(isHovered ? 0.08 : 0))
+        .background(
+            isMergePending
+                ? Color.orange.opacity(0.15)
+                : Color.primary.opacity(isHovered ? 0.08 : 0)
+        )
+        .overlay(alignment: .leading) {
+            if isMergePending {
+                Rectangle()
+                    .fill(Color.orange)
+                    .frame(width: 3)
+            }
+        }
         .contentShape(Rectangle())
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.12)) {
@@ -124,7 +150,15 @@ struct VirtualClipboardItemRow: View {
             }
         }
         .onTapGesture {
-            copyItem()
+            if hasMergePending {
+                onMergeCombine?()
+            } else if isMergePending {
+                onMergeCancel?()
+            } else if item.isMergedClip {
+                onOpenMerged?()
+            } else {
+                copyItem()
+            }
         }
         .onDrag {
             dragItemProvider()
@@ -145,6 +179,22 @@ struct VirtualClipboardItemRow: View {
             if !item.isImage {
                 Button("Save") {
                     onSaveSnippet?()
+                }
+            }
+
+            if !item.isImage {
+                if isMergePending {
+                    Button("Cancel Merge") {
+                        onMergeCancel?()
+                    }
+                } else if hasMergePending {
+                    Button("Merge with Selected") {
+                        onMergeCombine?()
+                    }
+                } else {
+                    Button("Select for Merge") {
+                        onMergeSelect?()
+                    }
                 }
             }
 

@@ -1240,6 +1240,66 @@ class ClipboardManager: ObservableObject {
         favoriteItemIDs.contains(itemId)
     }
 
+    /// Create a merged clip from multiple components and insert it into the main
+    /// clipboard history. The new item appears at the top of the list like any
+    /// fresh copy, but is marked as `.merged` so the UI can handle it specially.
+    @discardableResult
+    func createMergedClip(components: [String]) -> ClipboardItemViewModel? {
+        guard components.count >= 2 else { return nil }
+
+        let encoded = MergedClipCodec.encode(components)
+        var newItem: ClipboardItemViewModel?
+
+        backgroundContext.performAndWait {
+            let item = ClipboardItem.create(
+                content: encoded,
+                category: .merged,
+                sourceApp: "Klippy",
+                context: backgroundContext
+            )
+            do {
+                try backgroundContext.save()
+                newItem = ClipboardItemViewModel(from: item)
+            } catch {
+                print("Failed to save merged clip: \(error)")
+            }
+        }
+
+        if let item = newItem {
+            DispatchQueue.main.async { [weak self] in
+                self?.addToRecentItems(item)
+                self?.updateTotalItemCount()
+            }
+        }
+
+        return newItem
+    }
+
+    /// Fetch all pinned items from Core Data, regardless of cache window.
+    /// Returns them sorted by most recently pinned (using createdAt as proxy).
+    func fetchAllPinnedItems() -> [ClipboardItemViewModel] {
+        guard !favoriteItemIDs.isEmpty else { return [] }
+
+        let idsSnapshot = favoriteItemIDs
+        var results: [ClipboardItemViewModel] = []
+
+        backgroundContext.performAndWait {
+            let request: NSFetchRequest<ClipboardItem> = ClipboardItem.fetchRequest()
+            let ids = Array(idsSnapshot)
+            request.predicate = NSPredicate(format: "id IN %@", ids)
+            request.sortDescriptors = [NSSortDescriptor(keyPath: \ClipboardItem.createdAt, ascending: false)]
+
+            do {
+                let items = try backgroundContext.fetch(request)
+                results = items.map { ClipboardItemViewModel(from: $0) }
+            } catch {
+                print("Failed to fetch pinned items: \(error)")
+            }
+        }
+
+        return results
+    }
+
     @discardableResult
     func toggleFavorite(itemId: UUID) -> Bool {
         let isNowFavorite: Bool

@@ -74,8 +74,9 @@ class PersistenceController {
         let ssCreatedAt = NSAttributeDescription(); ssCreatedAt.name = "createdAt"; ssCreatedAt.attributeType = .dateAttributeType; ssCreatedAt.isOptional = true
         let ssUpdatedAt = NSAttributeDescription(); ssUpdatedAt.name = "updatedAt"; ssUpdatedAt.attributeType = .dateAttributeType; ssUpdatedAt.isOptional = true
         let ssSortOrder = NSAttributeDescription(); ssSortOrder.name = "sortOrder"; ssSortOrder.attributeType = .integer32AttributeType; ssSortOrder.isOptional = true; ssSortOrder.defaultValue = 0
+        let ssIsMerged = NSAttributeDescription(); ssIsMerged.name = "isMerged"; ssIsMerged.attributeType = .booleanAttributeType; ssIsMerged.isOptional = true; ssIsMerged.defaultValue = false
 
-        savedSnippet.properties = [ssId, ssTitle, ssContent, ssCreatedAt, ssUpdatedAt, ssSortOrder]
+        savedSnippet.properties = [ssId, ssTitle, ssContent, ssCreatedAt, ssUpdatedAt, ssSortOrder, ssIsMerged]
 
         model.entities = [clipboardItem, searchIndex, savedSnippet]
         return model

@@ -228,21 +228,24 @@ class SearchEngine: ObservableObject {
         // Don't fetch heavy image data during search
         request.propertiesToFetch = ["id", "content", "contentType", "contentHash", "searchableContent", "createdAt", "lastAccessedAt", "usageCount", "sourceApplication", "tags", "isImage", "imageWidth", "imageHeight"]
 
-        // Execute search
+        // Execute search — primary CONTAINS predicate is the single source of truth.
+        // No fuzzy DB fallback: it produced garbage matches via LIKE with interleaved wildcards.
         let primaryResults = try backgroundContext.fetch(request).map { ClipboardItemViewModel(from: $0) }
-        var combinedResults = primaryResults
 
-        // Only do fuzzy search if primary results are insufficient and query is long enough
-        if !query.text.isEmpty &&
-            combinedResults.count < SearchConfig.fuzzyMinPrimaryResults &&
-            query.text.count >= SearchConfig.fuzzyMinTokenLength {
-            let existingIDs = Set(combinedResults.map(\.id))
-            let fuzzyResults = try fetchFuzzyCandidates(for: query, excludingIDs: existingIDs)
-            combinedResults.append(contentsOf: fuzzyResults)
+        // Extra safety: verify each result actually contains the query.
+        // This guards against any predicate edge case from letting non-matching items through.
+        let trimmedQuery = query.text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let verified: [ClipboardItemViewModel]
+        if trimmedQuery.isEmpty {
+            verified = primaryResults
+        } else {
+            verified = primaryResults.filter { item in
+                item.content.lowercased().contains(trimmedQuery)
+            }
         }
 
         return rankResults(
-            items: combinedResults,
+            items: verified,
             for: query.text,
             limit: query.limit
         )
@@ -311,28 +314,35 @@ class SearchEngine: ObservableObject {
         // Only score against a prefix of the content to avoid expensive ops on huge strings
         let contentPrefix = String(item.content.prefix(300))
         let normalizedContent = normalizeForFuzzy(contentPrefix)
-        var score = 0
 
-        // Relevance scoring — kept tight so recency can compete
+        // Day bucket: each calendar day is worth 100,000 points.
+        // This guarantees ALL of today's matches rank above yesterday's,
+        // which rank above last week's, etc. — matching user intent.
+        let calendar = Calendar.current
+        let dayStart = calendar.startOfDay(for: item.createdAt)
+        let daysSinceEpoch = Int(dayStart.timeIntervalSince1970 / 86400)
+        var score = daysSinceEpoch * 100_000
+
+        // Match quality bonus — decides ordering WITHIN a single day (0–1000 range).
         if normalizedContent == query {
-            score += 500
+            score += 1000
         } else if normalizedContent.hasPrefix(query) {
-            score += 300
+            score += 700
         } else if normalizedContent.contains(query) {
-            score += 100
+            score += 400
         }
 
         if !tokens.isEmpty, tokens.allSatisfy({ normalizedContent.contains($0) }) {
-            score += 50
+            score += 200
         }
 
-        // Only run expensive fuzzy matching for longer queries and limited items
+        // Fuzzy matching — small bonus, only for longer queries
         if query.count >= SearchConfig.fuzzyMinTokenLength && !normalizedContent.isEmpty {
             let contentTokens = normalizedSearchTokens(from: contentPrefix)
 
             for token in tokens.prefix(2) where token.count >= SearchConfig.fuzzyMinTokenLength {
                 if contentTokens.contains(token) {
-                    score += 30
+                    score += 50
                     continue
                 }
 
@@ -341,16 +351,15 @@ class SearchEngine: ObservableObject {
                     in: contentTokens,
                     maxDistance: SearchConfig.fuzzyMaxDistance
                 ) {
-                    score += (SearchConfig.fuzzyMaxDistance + 1 - distance) * 15
+                    score += (SearchConfig.fuzzyMaxDistance + 1 - distance) * 25
                 }
             }
         }
 
-        // Recency bonus — items from the last 7 days get up to 200 points
-        let ageInDays = Date().timeIntervalSince(item.createdAt) / 86400
-        if ageInDays < 7 {
-            score += Int((7.0 - ageInDays) / 7.0 * 200)
-        }
+        // Finer recency within same day: seconds since midnight / 100 (0–864 range).
+        // Later-in-the-day items rank above earlier-in-the-day within equal match quality.
+        let secondsSinceMidnight = item.createdAt.timeIntervalSince(dayStart)
+        score += Int(secondsSinceMidnight / 100)
 
         return score
     }

@@ -2,6 +2,7 @@ import SwiftUI
 import CoreData
 import AppKit
 import UniformTypeIdentifiers
+import ServiceManagement
 
 struct ContentView: View {
     @Environment(\.managedObjectContext) private var viewContext
@@ -17,11 +18,16 @@ struct ContentView: View {
     @State private var customRangeEndDate = Date()
     @State private var showingSettings = false
     @State private var showingSaved = false
+    @State private var showingPinned = false
+    @State private var showingMerged = false
     @State private var showingSnippetEditor = false
     @State private var editingSnippet: SavedSnippetViewModel? = nil
     @State private var showingSavePopover = false
     @State private var snippetSaveTitle = ""
     @State private var snippetSaveContent = ""
+    @State private var pendingMergeItem: ClipboardItemViewModel? = nil
+    @State private var showingMergePreview = false
+    @State private var mergedItems: [ClipboardItemViewModel] = []
     @State private var showingSpotPanel = false
     @State private var spotQuery = ""
     @State private var isDropTargeted = false
@@ -55,13 +61,67 @@ struct ContentView: View {
                 headerCard(resultCount: items.count)
                 if showingSaved {
                     savedSnippetsCard
+                } else if showingPinned {
+                    pinnedOnlyCard
+                } else if showingMerged {
+                    mergedOnlyCard
                 } else {
                     categoryStrip
+                    if let pending = pendingMergeItem {
+                        mergeBanner(pending: pending)
+                    }
                     listCard(items: items)
                 }
                 footerBar(resultCount: items.count)
             }
             .padding(10)
+
+            if showingMergePreview {
+                Color.black.opacity(0.16)
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        showingMergePreview = false
+                    }
+                    .transition(.opacity)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "link.circle.fill")
+                            .foregroundColor(.orange)
+                        Text("Merged Clips")
+                            .font(.headline)
+                        Spacer()
+                        Button {
+                            showingMergePreview = false
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.secondary)
+                                .font(.system(size: 14))
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    Text("Tap any item to copy it")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+
+                    VStack(spacing: 6) {
+                        ForEach(Array(mergedItems.enumerated()), id: \.offset) { _, mergedItem in
+                            mergedItemRow(mergedItem)
+                        }
+                    }
+                }
+                .padding(16)
+                .frame(width: 340)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.primary.opacity(0.12), lineWidth: 0.5)
+                )
+                .shadow(color: Color.black.opacity(0.22), radius: 18, x: 0, y: 10)
+                .transition(.scale(scale: 0.96).combined(with: .opacity))
+                .zIndex(6)
+            }
 
             if showingSavePopover {
                 Color.black.opacity(0.16)
@@ -71,12 +131,26 @@ struct ContentView: View {
                     }
                     .transition(.opacity)
 
-                VStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 10) {
                     Text("Save")
                         .font(.headline)
 
                     TextField("Name (optional)", text: $snippetSaveTitle)
                         .textFieldStyle(.roundedBorder)
+
+                    Text("Content")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    TextEditor(text: $snippetSaveContent)
+                        .font(.system(size: 12, design: .monospaced))
+                        .frame(height: 100)
+                        .padding(4)
+                        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .stroke(Color.primary.opacity(0.12), lineWidth: 0.5)
+                        )
 
                     HStack {
                         Button("Cancel") {
@@ -88,13 +162,14 @@ struct ContentView: View {
                             let title = trimmed.isEmpty ? String(snippetSaveContent.prefix(40)) : trimmed
                             snippetManager.createSnippet(title: title, content: snippetSaveContent)
                             showingSavePopover = false
-                            showToast("Saved", symbol: "bookmark.fill")
+                            FeedbackManager.playSave(); showToast("Saved", symbol: "bookmark.fill")
                         }
                         .buttonStyle(.borderedProminent)
+                        .disabled(snippetSaveContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                 }
                 .padding(16)
-                .frame(width: 300)
+                .frame(width: 320)
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -139,7 +214,10 @@ struct ContentView: View {
         .animation(.easeInOut(duration: 0.16), value: customRangeStartDate)
         .animation(.easeInOut(duration: 0.16), value: customRangeEndDate)
         .animation(.easeInOut(duration: 0.16), value: showingSavePopover)
+        .animation(.easeInOut(duration: 0.16), value: showingMergePreview)
         .animation(.easeInOut(duration: 0.16), value: showingSaved)
+        .animation(.easeInOut(duration: 0.16), value: showingPinned)
+        .animation(.easeInOut(duration: 0.16), value: showingMerged)
         .animation(.easeInOut(duration: 0.16), value: showingSpotPanel)
         .popover(isPresented: $showingSettings) {
             SettingsView()
@@ -193,11 +271,41 @@ struct ContentView: View {
 
                 HStack(spacing: 6) {
                     topIconButton(
+                        systemName: showingMerged ? "link.circle.fill" : "link",
+                        helpText: showingMerged ? "Show History" : "Merged"
+                    ) {
+                        withAnimation(.easeInOut(duration: 0.16)) {
+                            showingMerged.toggle()
+                            if showingMerged {
+                                showingSaved = false
+                                showingPinned = false
+                            }
+                        }
+                    }
+
+                    topIconButton(
+                        systemName: showingPinned ? "pin.fill" : "pin",
+                        helpText: showingPinned ? "Show History" : "Pinned"
+                    ) {
+                        withAnimation(.easeInOut(duration: 0.16)) {
+                            showingPinned.toggle()
+                            if showingPinned {
+                                showingSaved = false
+                                showingMerged = false
+                            }
+                        }
+                    }
+
+                    topIconButton(
                         systemName: showingSaved ? "bookmark.fill" : "bookmark",
                         helpText: showingSaved ? "Show History" : "Saved"
                     ) {
                         withAnimation(.easeInOut(duration: 0.16)) {
                             showingSaved.toggle()
+                            if showingSaved {
+                                showingPinned = false
+                                showingMerged = false
+                            }
                         }
                     }
 
@@ -312,6 +420,82 @@ struct ContentView: View {
         }
     }
 
+    private func mergedItemRow(_ item: ClipboardItemViewModel) -> some View {
+        Button {
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setString(item.content, forType: .string)
+            FeedbackManager.playCopy(); showToast("Copied", symbol: "checkmark.circle.fill")
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: item.category.iconName)
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(item.category.color)
+                    .font(.system(size: 16, weight: .semibold))
+                    .frame(width: 24)
+
+                Text(item.content)
+                    .font(.system(size: 13))
+                    .lineLimit(2)
+                    .foregroundColor(.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Image(systemName: "doc.on.doc")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 10)
+            .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func mergeBanner(pending: ClipboardItemViewModel) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "link.circle.fill")
+                .foregroundColor(.orange)
+                .font(.system(size: 14, weight: .semibold))
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Selected for merge")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                Text(String(pending.content.prefix(40)))
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            Text("Pick another →")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+
+            Button {
+                pendingMergeItem = nil
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundColor(.secondary)
+                    .font(.system(size: 14))
+            }
+            .buttonStyle(.plain)
+            .help("Cancel merge")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.orange.opacity(0.35), lineWidth: 0.5)
+        )
+    }
+
     private func listCard(items: [ClipboardItemViewModel]) -> some View {
         Group {
             if items.isEmpty {
@@ -341,18 +525,54 @@ struct ContentView: View {
                         item: item,
                         isFavorite: clipboardManager.isFavorite(itemId: item.id),
                         onCopied: {
-                            showToast("Copied to clipboard", symbol: "checkmark.circle.fill")
+                            FeedbackManager.playCopy(); showToast("Copied to clipboard", symbol: "checkmark.circle.fill")
                         },
                         onDeleted: {
-                            showToast("Item deleted", symbol: "trash")
+                            FeedbackManager.playDelete(); showToast("Item deleted", symbol: "trash")
                         },
                         onFavoriteToggled: { isNowFavorite in
+                            FeedbackManager.playPin()
                             showToast(isNowFavorite ? "Pinned item" : "Unpinned item", symbol: isNowFavorite ? "star.fill" : "star")
                         },
                         onSaveSnippet: {
                             snippetSaveContent = item.content
                             snippetSaveTitle = ""
                             showingSavePopover = true
+                        },
+                        isMergePending: pendingMergeItem?.id == item.id,
+                        hasMergePending: pendingMergeItem != nil && pendingMergeItem?.id != item.id,
+                        onMergeSelect: {
+                            pendingMergeItem = item
+                            showToast("Selected for merge — pick another", symbol: "link")
+                        },
+                        onMergeCombine: {
+                            guard let first = pendingMergeItem else { return }
+                            // Create a merged clipboard item — lives in the main list, not Saved.
+                            clipboardManager.createMergedClip(components: [first.content, item.content])
+
+                            mergedItems = [first, item]
+                            pendingMergeItem = nil
+                            showingMergePreview = true
+                            FeedbackManager.playMerge(); showToast("Merged", symbol: "link.circle.fill")
+                        },
+                        onMergeCancel: {
+                            pendingMergeItem = nil
+                        },
+                        onOpenMerged: {
+                            let classifier = ContentClassifier()
+                            let components = item.mergedComponents
+                            mergedItems = components.map { content in
+                                ClipboardItemViewModel(
+                                    id: UUID(),
+                                    content: content,
+                                    category: classifier.classify(content),
+                                    createdAt: item.createdAt,
+                                    lastAccessedAt: item.lastAccessedAt,
+                                    usageCount: 0,
+                                    sourceApplication: nil
+                                )
+                            }
+                            showingMergePreview = true
                         }
                     )
                 }
@@ -436,6 +656,132 @@ struct ContentView: View {
         return prioritized + remaining
     }
 
+    private var mergedOnlyCard: some View {
+        let results = searchEngine.search(
+            query: searchText,
+            category: .merged,
+            dateRange: selectedDateRange,
+            limit: 180
+        )
+        let filtered = applyDateRangeFilter(results)
+
+        return Group {
+            if filtered.isEmpty {
+                VStack(spacing: 10) {
+                    Image(systemName: searchText.isEmpty ? "link.circle" : "magnifyingglass.circle")
+                        .font(.system(size: 28, weight: .medium))
+                        .foregroundColor(.secondary)
+
+                    Text(searchText.isEmpty ? "No Merged Clips" : "No Results")
+                        .font(.headline)
+
+                    Text(searchText.isEmpty
+                         ? "Right-click an item, pick \"Select for Merge\", then tap another to merge them."
+                         : "Try another search term.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 280)
+                }
+                .padding(20)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                VirtualScrollView(
+                    items: filtered,
+                    itemHeight: listRowHeight
+                ) { item in
+                    VirtualClipboardItemRow(
+                        item: item,
+                        isFavorite: clipboardManager.isFavorite(itemId: item.id),
+                        onCopied: {
+                            FeedbackManager.playCopy(); showToast("Copied to clipboard", symbol: "checkmark.circle.fill")
+                        },
+                        onDeleted: {
+                            FeedbackManager.playDelete(); showToast("Item deleted", symbol: "trash")
+                        },
+                        onFavoriteToggled: { isNowFavorite in
+                            FeedbackManager.playPin()
+                            showToast(isNowFavorite ? "Pinned item" : "Unpinned item", symbol: isNowFavorite ? "star.fill" : "star")
+                        },
+                        onOpenMerged: {
+                            let classifier = ContentClassifier()
+                            let components = item.mergedComponents
+                            mergedItems = components.map { content in
+                                ClipboardItemViewModel(
+                                    id: UUID(),
+                                    content: content,
+                                    category: classifier.classify(content),
+                                    createdAt: item.createdAt,
+                                    lastAccessedAt: item.lastAccessedAt,
+                                    usageCount: 0,
+                                    sourceApplication: nil
+                                )
+                            }
+                            showingMergePreview = true
+                        }
+                    )
+                }
+                .id("merged-list-\(searchText)")
+                .padding(8)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var pinnedOnlyCard: some View {
+        let pinned = clipboardManager.fetchAllPinnedItems()
+        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let filtered = trimmed.isEmpty
+            ? pinned
+            : pinned.filter { $0.content.lowercased().contains(trimmed) }
+
+        return Group {
+            if filtered.isEmpty {
+                VStack(spacing: 10) {
+                    Image(systemName: searchText.isEmpty ? "pin" : "magnifyingglass.circle")
+                        .font(.system(size: 28, weight: .medium))
+                        .foregroundColor(.secondary)
+
+                    Text(searchText.isEmpty ? "No Pinned Items" : "No Results")
+                        .font(.headline)
+
+                    Text(searchText.isEmpty
+                         ? "Right-click any clipboard item and tap \"Pin\" to keep it here."
+                         : "Try another search term.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 280)
+                }
+                .padding(20)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                VirtualScrollView(
+                    items: filtered,
+                    itemHeight: listRowHeight
+                ) { item in
+                    VirtualClipboardItemRow(
+                        item: item,
+                        isFavorite: true,
+                        onCopied: {
+                            FeedbackManager.playCopy(); showToast("Copied to clipboard", symbol: "checkmark.circle.fill")
+                        },
+                        onDeleted: {
+                            FeedbackManager.playDelete(); showToast("Item deleted", symbol: "trash")
+                        },
+                        onFavoriteToggled: { isNowFavorite in
+                            FeedbackManager.playPin()
+                            showToast(isNowFavorite ? "Pinned item" : "Unpinned item", symbol: isNowFavorite ? "star.fill" : "star")
+                        }
+                    )
+                }
+                .id("pinned-list-\(searchText)")
+                .padding(8)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     private var savedSnippetsCard: some View {
         Group {
             let results = snippetManager.filteredSnippets(query: searchText)
@@ -474,7 +820,7 @@ struct ContentView: View {
     private func savedSnippetRow(_ snippet: SavedSnippetViewModel) -> some View {
         VStack(spacing: 0) {
             HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "bookmark.fill")
+                Image(systemName: snippet.isMerged ? "link.circle.fill" : "bookmark.fill")
                     .symbolRenderingMode(.hierarchical)
                     .foregroundStyle(.orange)
                     .font(.system(size: 19, weight: .semibold))
@@ -482,10 +828,20 @@ struct ContentView: View {
 
                 VStack(alignment: .leading, spacing: 4) {
                     if !snippet.title.isEmpty && snippet.title != String(snippet.content.prefix(40)) {
-                        Text(snippet.title)
-                            .font(.system(size: max(11, CGFloat(min(max(textSize, 13), 24)) - 3), weight: .medium))
-                            .foregroundColor(.orange)
-                            .lineLimit(1)
+                        HStack(spacing: 4) {
+                            if snippet.isMerged {
+                                Text("MERGED")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 1)
+                                    .background(Color.orange, in: Capsule())
+                            }
+                            Text(snippet.title)
+                                .font(.system(size: max(11, CGFloat(min(max(textSize, 13), 24)) - 3), weight: .medium))
+                                .foregroundColor(.orange)
+                                .lineLimit(1)
+                        }
                     }
 
                     Text(snippet.displayContent)
@@ -506,7 +862,7 @@ struct ContentView: View {
 
                     Button {
                         snippetManager.deleteSnippet(id: snippet.id)
-                        showToast("Removed", symbol: "trash")
+                        FeedbackManager.playDelete(); showToast("Removed", symbol: "trash")
                     } label: {
                         Image(systemName: "trash")
                             .font(.system(size: 14, weight: .medium))
@@ -526,13 +882,23 @@ struct ContentView: View {
         }
         .contentShape(Rectangle())
         .onTapGesture {
-            snippetManager.copySnippetToClipboard(snippet)
-            showToast("Copied", symbol: "checkmark.circle.fill")
+            if snippet.isMerged {
+                openMergedSnippet(snippet)
+            } else {
+                snippetManager.copySnippetToClipboard(snippet)
+                FeedbackManager.playCopy(); showToast("Copied", symbol: "checkmark.circle.fill")
+            }
         }
         .contextMenu {
-            Button("Copy") {
-                snippetManager.copySnippetToClipboard(snippet)
-                showToast("Copied", symbol: "checkmark.circle.fill")
+            if snippet.isMerged {
+                Button("Open") {
+                    openMergedSnippet(snippet)
+                }
+            } else {
+                Button("Copy") {
+                    snippetManager.copySnippetToClipboard(snippet)
+                    FeedbackManager.playCopy(); showToast("Copied", symbol: "checkmark.circle.fill")
+                }
             }
 
             Button("Rename") {
@@ -542,9 +908,28 @@ struct ContentView: View {
 
             Button("Delete") {
                 snippetManager.deleteSnippet(id: snippet.id)
-                showToast("Removed", symbol: "trash")
+                FeedbackManager.playDelete(); showToast("Removed", symbol: "trash")
             }
         }
+    }
+
+    private func openMergedSnippet(_ snippet: SavedSnippetViewModel) {
+        // Reconstruct lightweight view models from component strings.
+        // Classify each so the icons match what the content looks like.
+        let classifier = ContentClassifier()
+        let components = snippet.mergedComponents
+        mergedItems = components.map { content in
+            ClipboardItemViewModel(
+                id: UUID(),
+                content: content,
+                category: classifier.classify(content),
+                createdAt: snippet.createdAt,
+                lastAccessedAt: snippet.updatedAt,
+                usageCount: 0,
+                sourceApplication: nil
+            )
+        }
+        showingMergePreview = true
     }
 
     private static let savedDateFormatter: DateFormatter = {
@@ -560,7 +945,41 @@ struct ContentView: View {
             dateRange: selectedDateRange,
             limit: 180
         )
-        return prioritizeFavorites(in: applyDateRangeFilter(results))
+        return mergeWithPinned(applyDateRangeFilter(results))
+    }
+
+    /// Ensures ALL pinned items appear at the top, even if they fall outside
+    /// the search/category/date window. Pinned items are fetched directly from
+    /// Core Data so they persist regardless of how old they are.
+    private func mergeWithPinned(_ items: [ClipboardItemViewModel]) -> [ClipboardItemViewModel] {
+        let pinnedAll = clipboardManager.fetchAllPinnedItems()
+        guard !pinnedAll.isEmpty else { return items }
+
+        // Apply current filters to pinned items too so switching category hides irrelevant pins
+        let filteredPinned = pinnedAll.filter { pinned in
+            // Category filter
+            if selectedCategory != .all && pinned.category != selectedCategory {
+                return false
+            }
+            // Date range filter
+            if let range = selectedDateRange {
+                if pinned.createdAt < range.start || pinned.createdAt >= range.end {
+                    return false
+                }
+            }
+            // Search filter (simple contains match)
+            let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if !trimmed.isEmpty && !pinned.content.lowercased().contains(trimmed) {
+                return false
+            }
+            return true
+        }
+
+        // Deduplicate: remove pinned items from the regular list since they'll appear at top
+        let pinnedIDs = Set(filteredPinned.map(\.id))
+        let unpinnedItems = items.filter { !pinnedIDs.contains($0.id) }
+
+        return filteredPinned + unpinnedItems
     }
 
     private var spotResults: [ClipboardItemViewModel] {
@@ -637,7 +1056,7 @@ struct ContentView: View {
                         ForEach(spotResults) { item in
                             SpotResultRow(item: item) {
                                 ClipboardManager.shared.copyToClipboard(item)
-                                showToast("Copied from Spot", symbol: "sparkles")
+                                FeedbackManager.playCopy(); showToast("Copied from Spot", symbol: "sparkles")
                                 closeSpotPanel()
                             }
                         }
@@ -1076,12 +1495,61 @@ private struct ToastView: View {
     }
 }
 
+enum LaunchAtLoginHelper {
+    static var isEnabled: Bool {
+        SMAppService.mainApp.status == .enabled
+    }
+
+    static func setEnabled(_ enabled: Bool) {
+        do {
+            if enabled {
+                if SMAppService.mainApp.status == .enabled {
+                    return
+                }
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+        } catch {
+            print("Launch at login toggle failed: \(error)")
+        }
+    }
+}
+
 struct SettingsView: View {
     @AppStorage("klippy.ui.textSize") private var textSize: Double = 16
+    @AppStorage("klippy.feedback.hapticsEnabled") private var hapticsEnabled: Bool = true
     @State private var showClearConfirm = false
+    @State private var launchAtLogin: Bool = LaunchAtLoginHelper.isEnabled
 
     var body: some View {
         VStack(spacing: 14) {
+            // General
+            settingsSection(title: "General", icon: "power") {
+                Toggle(isOn: $launchAtLogin) {
+                    Text("Launch at login")
+                        .font(.caption)
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .tint(.orange)
+                .onChange(of: launchAtLogin) { newValue in
+                    LaunchAtLoginHelper.setEnabled(newValue)
+                    launchAtLogin = LaunchAtLoginHelper.isEnabled
+                }
+            }
+
+            // Feedback
+            settingsSection(title: "Feedback", icon: "hand.tap.fill") {
+                Toggle(isOn: $hapticsEnabled) {
+                    Text("Haptics")
+                        .font(.caption)
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .tint(.orange)
+            }
+
             // Storage
             settingsSection(title: "Storage", icon: "internaldrive.fill") {
                 settingsRow(label: "Saved items", value: "\(ClipboardManager.shared.totalItemCount)")
