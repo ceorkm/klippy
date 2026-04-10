@@ -11,6 +11,7 @@ public class SavedSnippet: NSManagedObject {
     @NSManaged public var createdAt: Date?
     @NSManaged public var updatedAt: Date?
     @NSManaged public var sortOrder: Int32
+    @NSManaged public var isMerged: Bool
 }
 
 extension SavedSnippet {
@@ -21,6 +22,7 @@ extension SavedSnippet {
     static func create(
         title: String,
         content: String,
+        isMerged: Bool = false,
         context: NSManagedObjectContext
     ) -> SavedSnippet {
         let snippet = SavedSnippet(context: context)
@@ -30,7 +32,21 @@ extension SavedSnippet {
         snippet.createdAt = Date()
         snippet.updatedAt = Date()
         snippet.sortOrder = 0
+        snippet.isMerged = isMerged
         return snippet
+    }
+}
+
+// MARK: - Merge helpers
+enum MergedSnippetCodec {
+    private static let marker = "\u{001F}KLIPPY_MERGE\u{001F}"
+
+    static func encode(_ components: [String]) -> String {
+        components.joined(separator: marker)
+    }
+
+    static func decode(_ content: String) -> [String] {
+        content.components(separatedBy: marker)
     }
 }
 
@@ -42,6 +58,7 @@ struct SavedSnippetViewModel: Identifiable {
     let createdAt: Date
     let updatedAt: Date
     let sortOrder: Int32
+    let isMerged: Bool
 
     init(from snippet: SavedSnippet) {
         self.id = snippet.id ?? UUID()
@@ -50,6 +67,7 @@ struct SavedSnippetViewModel: Identifiable {
         self.createdAt = snippet.createdAt ?? Date()
         self.updatedAt = snippet.updatedAt ?? Date()
         self.sortOrder = snippet.sortOrder
+        self.isMerged = snippet.isMerged
     }
 
     init(
@@ -58,7 +76,8 @@ struct SavedSnippetViewModel: Identifiable {
         content: String,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
-        sortOrder: Int32 = 0
+        sortOrder: Int32 = 0,
+        isMerged: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -66,9 +85,18 @@ struct SavedSnippetViewModel: Identifiable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.sortOrder = sortOrder
+        self.isMerged = isMerged
+    }
+
+    var mergedComponents: [String] {
+        guard isMerged else { return [] }
+        return MergedSnippetCodec.decode(content)
     }
 
     var displayContent: String {
+        if isMerged {
+            return mergedComponents.joined(separator: " • ")
+        }
         let maxLength = 200
         if content.count > maxLength {
             return String(content.prefix(maxLength)) + "..."

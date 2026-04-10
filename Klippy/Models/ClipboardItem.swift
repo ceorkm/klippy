@@ -28,6 +28,7 @@ enum ContentCategory: Int16, CaseIterable {
     case paymentCard = 19
     case ipAddress = 20
     case identifier = 21
+    case merged = 22
     case other = 99
     
     var displayName: String {
@@ -54,6 +55,7 @@ enum ContentCategory: Int16, CaseIterable {
         case .paymentCard: return "Payment Cards"
         case .ipAddress: return "IP Addresses"
         case .identifier: return "Identifiers"
+        case .merged: return "Merged"
         case .other: return "Other"
         }
     }
@@ -82,6 +84,7 @@ enum ContentCategory: Int16, CaseIterable {
         case .paymentCard: return "creditcard.fill"
         case .ipAddress: return "network"
         case .identifier: return "barcode"
+        case .merged: return "link.circle.fill"
         case .other: return "questionmark.circle"
         }
     }
@@ -110,6 +113,7 @@ enum ContentCategory: Int16, CaseIterable {
         case .paymentCard: return .green
         case .ipAddress: return .teal
         case .identifier: return .cyan
+        case .merged: return .orange
         case .other: return .secondary
         }
     }
@@ -214,6 +218,27 @@ extension ClipboardItem {
 }
 
 private let fileBundlePrefix = "klippy-file-bundle-v2:"
+private let mergedClipPrefix = "\u{001F}KLIPPY_MERGE\u{001F}"
+private let mergedClipSeparator = "\u{001F}"
+
+enum MergedClipCodec {
+    static func encode(_ components: [String]) -> String {
+        return mergedClipPrefix + mergedClipSeparator + components.joined(separator: mergedClipSeparator)
+    }
+
+    static func decode(_ content: String) -> [String] {
+        guard content.hasPrefix(mergedClipPrefix) else { return [] }
+        let stripped = String(content.dropFirst(mergedClipPrefix.count))
+        let trimmed = stripped.hasPrefix(mergedClipSeparator)
+            ? String(stripped.dropFirst(mergedClipSeparator.count))
+            : stripped
+        return trimmed.components(separatedBy: mergedClipSeparator)
+    }
+
+    static func isMerged(_ content: String) -> Bool {
+        return content.hasPrefix(mergedClipPrefix)
+    }
+}
 
 private struct FileBundleEnvelope: Codable {
     struct Entry: Codable {
@@ -290,11 +315,22 @@ struct ClipboardItemViewModel: Identifiable {
     }
     
     var displayText: String {
+        if isMergedClip {
+            return mergedComponents.joined(separator: "  •  ")
+        }
         let maxLength = 200
         if content.count > maxLength {
             return String(content.prefix(maxLength)) + "..."
         }
         return content
+    }
+
+    var isMergedClip: Bool {
+        MergedClipCodec.isMerged(content)
+    }
+
+    var mergedComponents: [String] {
+        MergedClipCodec.decode(content)
     }
 
     var fileReferences: [ClipboardFileReference] {

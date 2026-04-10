@@ -4,9 +4,9 @@ class ContentClassifier {
     
     // MARK: - Regex Patterns
     private struct Patterns {
-        // URL patterns
+        // URL patterns — matches http/https, file://, ftp://, ssh://, and similar schemes
         static let url = try! NSRegularExpression(
-            pattern: #"https?://[^\s/$.?#].[^\s]*"#,
+            pattern: #"(?:https?|file|ftps?|ssh|git|sftp)://[^\s]+"#,
             options: [.caseInsensitive]
         )
         
@@ -209,10 +209,13 @@ class ContentClassifier {
     
     func classify(_ content: String) -> ContentCategory {
         let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        
+
         // Early return for empty content
         guard !trimmedContent.isEmpty else { return .other }
-        
+
+        // Merged clips are internally marked with a prefix
+        if MergedClipCodec.isMerged(content) { return .merged }
+
         // Sensitive values are checked first so they are not hidden by generic categories.
         if isAPIKey(trimmedContent) { return .apiKey }
         if isPaymentCard(trimmedContent) { return .paymentCard }
@@ -509,64 +512,102 @@ class ContentClassifier {
         "xcodebuild", "xcrun", "make", "cmake", "gcc", "clang",
     ]
 
+    /// STRICT file-path detection. The guiding rule:
+    ///   "The entire content IS a file path, not just contains one."
+    ///
+    /// Accepts only:
+    ///   1. Absolute paths: `/Users/name/doc.pdf`, `~/Documents/file.txt`
+    ///   2. Relative paths starting with `./` or `../`
+    ///   3. Windows paths: `C:\Users\Name\file.docx`
+    ///   4. Single filenames: `report.pdf` (no slashes, single word + known ext)
+    ///
+    /// Rejects anything with spaces, code-like characters, multi-line content,
+    /// URL schemes, CLI command prefixes, or unknown file extensions.
     private func isFilePath(_ content: String) -> Bool {
-        // Reject if content starts with a known CLI command
-        let firstWord = content.prefix(while: { !$0.isWhitespace }).lowercased()
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+
+        // Hard reject: multi-line content is never a single file path
+        if trimmed.contains("\n") || trimmed.contains("\r") {
+            return false
+        }
+
+        // Hard reject: code-like indicators anywhere
+        let codeIndicators = ["<?", "?>", "#!/", "{", "}", ";", "=>", "->", "<%", "%>", "&&", "||", "==", "!=", "$(", "`"]
+        for indicator in codeIndicators where trimmed.contains(indicator) {
+            return false
+        }
+
+        // Hard reject: URL schemes (this is a URL, not a file path)
+        let lowered = trimmed.lowercased()
+        let urlSchemes = [
+            "http://", "https://", "file://", "ftp://", "ftps://",
+            "ssh://", "git://", "sftp://", "chrome://", "about:",
+            "mailto:", "data:", "blob:", "javascript:", "tel:", "sms:"
+        ]
+        for scheme in urlSchemes where lowered.hasPrefix(scheme) {
+            return false
+        }
+
+        // Hard reject: starts with a known CLI command
+        let firstWord = trimmed.prefix(while: { !$0.isWhitespace }).lowercased()
         if Self.commandPrefixes.contains(firstWord) {
             return false
         }
 
-        let isMultiline = content.contains("\n")
-        let hasSemicolon = content.contains(";")
-        let hasBraces = content.contains("{") || content.contains("}")
-        let hasParens = content.contains("(") || content.contains(")")
-
-        // Short-circuit obvious code-like snippets before filename regexes can match embedded names.
-        if content.contains("<?") || content.contains("#!/") {
+        // Hard reject: quotation marks or brackets (suggests code/text)
+        let forbiddenChars: Set<Character> = ["<", ">", "[", "]", "\"", "'", "|", "*", "?", "="]
+        for char in forbiddenChars where trimmed.contains(char) {
             return false
         }
 
-        if hasSemicolon && hasBraces {
-            return false
+        // A real file path must contain at least one dot (for extension) OR be a dotfile path
+        guard trimmed.contains(".") else { return false }
+
+        // Case 1: Absolute/relative/Windows path — must START with a path-indicating character
+        let isAbsoluteUnix = trimmed.hasPrefix("/")
+        let isHomePath = trimmed.hasPrefix("~/")
+        let isRelativePath = trimmed.hasPrefix("./") || trimmed.hasPrefix("../")
+        let isWindowsPath = trimmed.count >= 3 &&
+            trimmed.first?.isLetter == true &&
+            trimmed[trimmed.index(trimmed.startIndex, offsetBy: 1)] == ":" &&
+            (trimmed[trimmed.index(trimmed.startIndex, offsetBy: 2)] == "\\" ||
+             trimmed[trimmed.index(trimmed.startIndex, offsetBy: 2)] == "/")
+
+        if isAbsoluteUnix || isHomePath || isRelativePath || isWindowsPath {
+            // Reject paths with unescaped spaces (real file paths with spaces are uncommon
+            // and usually come in bundles from Finder anyway)
+            if trimmed.contains(" ") { return false }
+
+            // Must end with a known file extension
+            guard let dotIndex = trimmed.lastIndex(of: ".") else { return false }
+            let extStart = trimmed.index(after: dotIndex)
+            guard extStart < trimmed.endIndex else { return false }
+            let ext = String(trimmed[extStart...]).lowercased()
+
+            // Reject all-numeric extension or content (e.g. version strings, IPs)
+            if ext.allSatisfy({ $0.isNumber }) { return false }
+
+            return Self.knownFileExtensions.contains(ext)
         }
 
-        if content.contains("$(") || content.contains("=>") {
-            return false
-        }
+        // Case 2: Single filename with no path separator — must be a clean "name.ext"
+        if !trimmed.contains("/") && !trimmed.contains("\\") && !trimmed.contains(" ") {
+            guard let dotIndex = trimmed.lastIndex(of: ".") else { return false }
+            let name = trimmed[..<dotIndex]
+            let extStart = trimmed.index(after: dotIndex)
+            guard extStart < trimmed.endIndex else { return false }
+            let ext = String(trimmed[extStart...]).lowercased()
 
-        if isMultiline && (hasSemicolon || hasBraces || hasParens) {
-            return false
-        }
+            // Name part must exist and not be empty
+            guard !name.isEmpty else { return false }
 
-        if let match = Patterns.filePath.firstMatch(in: content, range: NSRange(content.startIndex..., in: content)) {
-            // Only classify as file if the path dominates the content
-            let coverage = Double(match.range.length) / Double(max(content.count, 1))
-            if coverage > 0.7 { return true }
-        }
+            // Reject all-numeric names with dotted separators (version strings, IPs)
+            let withoutDots = trimmed.replacingOccurrences(of: ".", with: "")
+            if withoutDots.allSatisfy({ $0.isNumber }) { return false }
 
-        // Check for simple file names
-        let matches = Patterns.fileName.matches(in: content, range: NSRange(content.startIndex..., in: content))
-        if let match = matches.first, matches.count == 1 {
-            let matchLength = match.range.length
-            let contentLength = max(content.count, 1)
-            guard Double(matchLength) / Double(contentLength) > 0.8 else { return false }
-
-            guard let matchRange = Range(match.range, in: content) else { return false }
-            let matched = String(content[matchRange])
-
-            // Reject all-numeric dotted patterns (e.g. IP addresses like 95.111.111.111)
-            let withoutDots = matched.replacingOccurrences(of: ".", with: "")
-            if withoutDots.allSatisfy({ $0.isNumber || $0 == "/" }) {
-                return false
-            }
-
-            // Only accept known file extensions
-            if let dotIndex = matched.lastIndex(of: ".") {
-                let ext = String(matched[matched.index(after: dotIndex)...]).lowercased()
-                return Self.knownFileExtensions.contains(ext)
-            }
-
-            return false
+            // Extension must be in our whitelist
+            return Self.knownFileExtensions.contains(ext)
         }
 
         return false
@@ -810,14 +851,17 @@ class ContentClassifier {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: ".,;:!?)\"]"))
             .trimmingCharacters(in: CharacterSet(charactersIn: "([\""))
-        
+
+        let lowered = trimmedCandidate.lowercased()
+        let knownSchemes = ["http://", "https://", "file://", "ftp://", "ftps://", "ssh://", "git://", "sftp://"]
+
         let candidate: String
-        if trimmedCandidate.lowercased().hasPrefix("http://") || trimmedCandidate.lowercased().hasPrefix("https://") {
+        if knownSchemes.contains(where: { lowered.hasPrefix($0) }) {
             candidate = trimmedCandidate
         } else {
             candidate = "https://\(trimmedCandidate)"
         }
-        
+
         return URL(string: candidate)
     }
     

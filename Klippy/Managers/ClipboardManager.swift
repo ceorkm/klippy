@@ -163,13 +163,34 @@ class ClipboardManager: ObservableObject {
         }
     }
     
+    private func debugLog(_ msg: String) {
+        let logFile = "/tmp/klippy_debug.log"
+        let line = "\(Date()): \(msg)\n"
+        if let data = line.data(using: .utf8) {
+            if FileManager.default.fileExists(atPath: logFile) {
+                let handle = FileHandle(forWritingAtPath: logFile)!
+                handle.seekToEndOfFile()
+                handle.write(data)
+                handle.closeFile()
+            } else {
+                FileManager.default.createFile(atPath: logFile, contents: data)
+            }
+        }
+    }
+
     private func getClipboardContent() -> (
         content: String?,
         imageData: Data?,
         imageSize: NSSize?,
         categoryOverride: ContentCategory?
     ) {
-        print("🔍 Starting clipboard content detection...")
+        debugLog("=== Starting clipboard content detection ===")
+        if let types = pasteboard.types {
+            debugLog("Pasteboard types: \(types.map(\.rawValue))")
+        }
+        debugLog(".string = \(pasteboard.string(forType: .string) ?? "(nil)")")
+        debugLog(".fileURL = \(pasteboard.string(forType: .init("public.file-url")) ?? "(nil)")")
+        debugLog(".html = \(pasteboard.data(forType: .html) != nil ? "present" : "nil")")
 
         // PRIORITY 1: Preserve file/document references as real file URLs.
         // Finder often includes an icon image on the pasteboard; file URLs must win.
@@ -262,10 +283,12 @@ class ClipboardManager: ObservableObject {
 
         // Handle other text-like types (URLs, etc.)
         if let url = pasteboard.string(forType: .URL) {
+            print("⚠️ Fell through to .URL fallback: \(url.prefix(80))")
             return (content: url, imageData: nil, imageSize: nil, categoryOverride: .url)
         }
 
         if let fileURL = pasteboard.string(forType: .fileURL) {
+            print("⚠️ Fell through to .fileURL fallback: \(fileURL.prefix(80))")
             return (content: fileURL, imageData: nil, imageSize: nil, categoryOverride: .file)
         }
 
@@ -1215,6 +1238,66 @@ class ClipboardManager: ObservableObject {
 
     func isFavorite(itemId: UUID) -> Bool {
         favoriteItemIDs.contains(itemId)
+    }
+
+    /// Create a merged clip from multiple components and insert it into the main
+    /// clipboard history. The new item appears at the top of the list like any
+    /// fresh copy, but is marked as `.merged` so the UI can handle it specially.
+    @discardableResult
+    func createMergedClip(components: [String]) -> ClipboardItemViewModel? {
+        guard components.count >= 2 else { return nil }
+
+        let encoded = MergedClipCodec.encode(components)
+        var newItem: ClipboardItemViewModel?
+
+        backgroundContext.performAndWait {
+            let item = ClipboardItem.create(
+                content: encoded,
+                category: .merged,
+                sourceApp: "Klippy",
+                context: backgroundContext
+            )
+            do {
+                try backgroundContext.save()
+                newItem = ClipboardItemViewModel(from: item)
+            } catch {
+                print("Failed to save merged clip: \(error)")
+            }
+        }
+
+        if let item = newItem {
+            DispatchQueue.main.async { [weak self] in
+                self?.addToRecentItems(item)
+                self?.updateTotalItemCount()
+            }
+        }
+
+        return newItem
+    }
+
+    /// Fetch all pinned items from Core Data, regardless of cache window.
+    /// Returns them sorted by most recently pinned (using createdAt as proxy).
+    func fetchAllPinnedItems() -> [ClipboardItemViewModel] {
+        guard !favoriteItemIDs.isEmpty else { return [] }
+
+        let idsSnapshot = favoriteItemIDs
+        var results: [ClipboardItemViewModel] = []
+
+        backgroundContext.performAndWait {
+            let request: NSFetchRequest<ClipboardItem> = ClipboardItem.fetchRequest()
+            let ids = Array(idsSnapshot)
+            request.predicate = NSPredicate(format: "id IN %@", ids)
+            request.sortDescriptors = [NSSortDescriptor(keyPath: \ClipboardItem.createdAt, ascending: false)]
+
+            do {
+                let items = try backgroundContext.fetch(request)
+                results = items.map { ClipboardItemViewModel(from: $0) }
+            } catch {
+                print("Failed to fetch pinned items: \(error)")
+            }
+        }
+
+        return results
     }
 
     @discardableResult
