@@ -111,11 +111,27 @@ class SearchEngine: ObservableObject {
             )
         }
 
-        // Fire async search via debounce — never block the main thread
-        searchSubject.send(searchQuery)
+        // Synchronous search — no fuzzy matching, no LIKE queries, so this is fast
+        // enough (~5ms for 4000 items) to run on the main thread without lag.
+        let startTime = Date()
+        let results = executeSearchSynchronously(searchQuery)
+        let stats = SearchStats(
+            totalMatches: results.count,
+            searchTime: Date().timeIntervalSince(startTime),
+            cacheHit: false
+        )
 
-        // Return stale cache or empty while async search runs
-        return searchResults
+        searchCache[cacheKey] = CachedSearchResult(
+            results: results,
+            timestamp: Date(),
+            stats: stats
+        )
+        cleanExpiredCache()
+
+        searchResults = results
+        searchStats = stats
+
+        return results
     }
 
     func updateSearchQuery(_ query: String) {
@@ -249,6 +265,20 @@ class SearchEngine: ObservableObject {
             for: query.text,
             limit: query.limit
         )
+    }
+
+    private func executeSearchSynchronously(_ query: SearchQuery) -> [ClipboardItemViewModel] {
+        var results: [ClipboardItemViewModel] = []
+
+        backgroundContext.performAndWait {
+            do {
+                results = try executeSearch(query)
+            } catch {
+                print("Search error: \(error)")
+            }
+        }
+
+        return results
     }
 
     private func buildTextSearchPredicate(for text: String) -> NSPredicate {
