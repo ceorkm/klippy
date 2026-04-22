@@ -32,6 +32,11 @@ class ClipboardManager: ObservableObject {
     // Duplicate detection
     var recentHashes: Set<String> = []
     private let maxRecentHashes = 10000
+    // Short-window text dedup: catches voice-to-text apps that write the same
+    // content twice in quick succession. Doesn't block intentional re-copies later.
+    private var lastTextHash: String?
+    private var lastTextTimestamp: Date?
+    private let textDedupWindow: TimeInterval = 2.0
     private let favoritesDefaultsKey = "klippy.favoriteItemIDs"
 
     private struct ExportClipboardItem: Codable {
@@ -130,24 +135,32 @@ class ClipboardManager: ObservableObject {
             return // No content to process
         }
 
-        // Allow duplicate text entries; still deduplicate non-text payloads.
-        let shouldDeduplicate = (contentType != "text")
-        if shouldDeduplicate && recentHashes.contains(contentHash) {
-            print("🔄 Duplicate \(contentType) detected, skipping")
-            return
-        }
-
-        print("✅ New \(contentType) content, adding to history")
-
-        // Keep the duplicate-hash index for non-text content only.
-        if shouldDeduplicate {
+        // Non-text content: permanent dedup via recentHashes.
+        // Text: short-window dedup only (catches apps that write twice in rapid succession
+        // like voice-to-text, but still allows intentional re-copy of the same text later).
+        if contentType == "text" {
+            if let lastHash = lastTextHash,
+               let lastTime = lastTextTimestamp,
+               lastHash == contentHash,
+               Date().timeIntervalSince(lastTime) < textDedupWindow {
+                print("🔄 Duplicate text within \(textDedupWindow)s window, skipping")
+                return
+            }
+            lastTextHash = contentHash
+            lastTextTimestamp = Date()
+        } else {
+            if recentHashes.contains(contentHash) {
+                print("🔄 Duplicate \(contentType) detected, skipping")
+                return
+            }
             recentHashes.insert(contentHash)
             if recentHashes.count > maxRecentHashes {
-                // Remove oldest hashes (simplified approach)
                 let hashesToRemove = Array(recentHashes.prefix(recentHashes.count - maxRecentHashes))
                 hashesToRemove.forEach { recentHashes.remove($0) }
             }
         }
+
+        print("✅ New \(contentType) content, adding to history")
 
         // Process in background to avoid blocking UI
         Task {
