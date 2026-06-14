@@ -16,6 +16,7 @@ struct ContentView: View {
     @State private var showingCustomDateRangePicker = false
     @State private var customRangeStartDate = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
     @State private var customRangeEndDate = Date()
+    @State private var customRangeEditingEndpoint: CustomRangeEndpoint = .start
     @State private var showingSettings = false
     @State private var showingSaved = false
     @State private var showingPinned = false
@@ -193,6 +194,19 @@ struct ContentView: View {
                     .zIndex(3)
             }
 
+            if showingCustomDateRangePicker {
+                Color.black.opacity(0.16)
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        showingCustomDateRangePicker = false
+                    }
+                    .transition(.opacity)
+
+                customDateRangeEditor
+                    .transition(.scale(scale: 0.96).combined(with: .opacity))
+                    .zIndex(7)
+            }
+
             if let toast {
                 VStack {
                     Spacer()
@@ -221,9 +235,6 @@ struct ContentView: View {
         .animation(.easeInOut(duration: 0.16), value: showingSpotPanel)
         .popover(isPresented: $showingSettings) {
             SettingsView()
-        }
-        .sheet(isPresented: $showingCustomDateRangePicker) {
-            customDateRangeEditor
         }
         .popover(isPresented: $showingSnippetEditor) {
             SnippetEditorView(
@@ -1109,15 +1120,46 @@ struct ContentView: View {
     }
 
     private var customDateRangeEditor: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Custom Date Range")
-                .font(.headline)
+        let activeBinding = customRangeEditingEndpoint == .start
+            ? $customRangeStartDate
+            : $customRangeEndDate
 
-            DatePicker("From", selection: $customRangeStartDate, displayedComponents: .date)
-                .datePickerStyle(.field)
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Custom Date Range")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    showingCustomDateRangePicker = false
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 15))
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Close")
+            }
 
-            DatePicker("To", selection: $customRangeEndDate, displayedComponents: .date)
-                .datePickerStyle(.field)
+            Picker("", selection: $customRangeEditingEndpoint) {
+                Text("From  •  \(customRangeStartDate.formatted(date: .abbreviated, time: .omitted))")
+                    .tag(CustomRangeEndpoint.start)
+                Text("To  •  \(customRangeEndDate.formatted(date: .abbreviated, time: .omitted))")
+                    .tag(CustomRangeEndpoint.end)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            DatePicker(
+                "",
+                selection: activeBinding,
+                in: customRangeEditingEndpoint == .start
+                    ? Date.distantPast...customRangeEndDate
+                    : customRangeStartDate...Date.distantFuture,
+                displayedComponents: .date
+            )
+            .datePickerStyle(.graphical)
+            .labelsHidden()
+            .id(customRangeEditingEndpoint)
 
             Text("Items copied between these dates (inclusive).")
                 .font(.caption2)
@@ -1142,8 +1184,14 @@ struct ContentView: View {
                 .buttonStyle(.borderedProminent)
             }
         }
-        .padding(14)
-        .frame(width: 300)
+        .padding(16)
+        .frame(width: 320)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.primary.opacity(0.12), lineWidth: 0.5)
+        )
+        .shadow(color: Color.black.opacity(0.22), radius: 18, x: 0, y: 10)
     }
 
     private func topIconButton(systemName: String, helpText: String, action: @escaping () -> Void) -> some View {
@@ -1294,6 +1342,11 @@ private struct ToastState: Equatable {
     let id: UUID
     let message: String
     let symbolName: String
+}
+
+private enum CustomRangeEndpoint: Hashable {
+    case start
+    case end
 }
 
 private enum ItemDateFilter: String, CaseIterable, Identifiable {
