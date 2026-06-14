@@ -53,3 +53,6 @@ klippy1.png
 # Environment
 .env
 .env.*
+
+# Local release signing config (real values; template committed as .release.env.example)
+.release.env

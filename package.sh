@@ -1,15 +1,25 @@
 #!/bin/bash
 # Klippy — build, sign (Developer ID), package DMG, and notarize.
 # Requires: Xcode, a "Developer ID Application" cert, and a notarytool
-# keychain profile named "your_notarytool_keychain_profile" (xcrun notarytool store-credentials your_notarytool_keychain_profile ...).
+# keychain profile (xcrun notarytool store-credentials <profile> ...).
+# Configure identity in .release.env (copy from .release.env.example).
 set -euo pipefail
+
+# Load signing identity from a local, gitignored config (see .release.env.example).
+# Values can also be supplied via the environment instead of the file.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "${HERE}/.release.env" ]]; then
+  # shellcheck disable=SC1091
+  source "${HERE}/.release.env"
+fi
+
+: "${TEAM_ID:?Set TEAM_ID (Apple Developer Team ID) in .release.env or the environment}"
+: "${SIGN_ID:?Set SIGN_ID (e.g. 'Developer ID Application: NAME (TEAMID)') in .release.env or the environment}"
+: "${NOTARY_PROFILE:?Set NOTARY_PROFILE (notarytool keychain profile name) in .release.env or the environment}"
 
 PROJECT="Klippy.xcodeproj"
 SCHEME="Klippy"
 CONFIG="Release"
-TEAM_ID="YOUR_TEAM_ID"
-SIGN_ID="Developer ID Application: YOUR NAME (${TEAM_ID})"
-NOTARY_PROFILE="your_notarytool_keychain_profile"
 BUNDLE_ID="com.klippy.Klippy"
 
 DERIVED=".dmg-build"
