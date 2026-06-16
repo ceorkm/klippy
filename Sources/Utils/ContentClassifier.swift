@@ -149,7 +149,10 @@ class ContentClassifier {
         
         static let strongAPIKeys: [NSRegularExpression] = [
             try! NSRegularExpression(pattern: #"\bsk-proj-[A-Za-z0-9_\-]{20,}\b"#, options: []),
-            try! NSRegularExpression(pattern: #"\bsk-[A-Za-z0-9]{20,}\b"#, options: []),
+            // Allow internal hyphens/underscores so provider-prefixed sk- keys
+            // (e.g. OpenRouter sk-or-v1-…, sk_live_…) are recognised, not just
+            // plain sk-<alnum> keys.
+            try! NSRegularExpression(pattern: #"\bsk-[A-Za-z0-9][A-Za-z0-9_\-]{18,}\b"#, options: []),
             try! NSRegularExpression(pattern: #"\bsk-ant-(?:api\d{2}-)?[A-Za-z0-9_\-]{20,}\b"#, options: []),
             try! NSRegularExpression(pattern: #"\bfc-[A-Za-z0-9_\-]{16,}\b"#, options: []),
             try! NSRegularExpression(pattern: #"\bgh[pousr]_[A-Za-z0-9]{20,}\b"#, options: []),
@@ -166,6 +169,14 @@ class ContentClassifier {
             try! NSRegularExpression(pattern: #"\bya29\.[0-9A-Za-z\-_]+\b"#, options: []),
             try! NSRegularExpression(pattern: #"\bSK[0-9a-fA-F]{32}\b"#, options: [])
         ]
+
+        // Generic custom-prefixed key shape: a short alpha(-num) prefix, a
+        // separator, then a long body — e.g. ROE_AbC123…, myapp_live_…, FOO-…
+        // The body is captured for an entropy check (avoids tagging slugs).
+        static let genericPrefixedKey = try! NSRegularExpression(
+            pattern: #"^[A-Za-z][A-Za-z0-9]{1,15}[_\-]([A-Za-z0-9_\-]{16,})$"#,
+            options: []
+        )
     }
     
     private static let instagramDomains = [
@@ -660,13 +671,58 @@ class ContentClassifier {
         for match in assignmentMatches {
             guard match.numberOfRanges > 1,
                   let valueRange = Range(match.range(at: 1), in: content) else { continue }
-            
+
             let value = String(content[valueRange])
             if looksLikeSecretValue(value) {
                 return true
             }
         }
-        
+
+        // Standalone high-entropy token with a custom or unknown prefix
+        // (e.g. ROE_… keys that match no provider pattern above).
+        if looksLikeStandaloneSecret(content) {
+            return true
+        }
+
+        return false
+    }
+
+    /// True when the whole content is a single token that looks like a secret
+    /// key — either a custom-prefixed key (ROE_…, myapp_live_…) or a long,
+    /// high-entropy token. Deliberately conservative to avoid tagging UUIDs,
+    /// hashes, slugs, or code identifiers.
+    private func looksLikeStandaloneSecret(_ content: String) -> Bool {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.contains(where: { $0.isWhitespace }),
+              trimmed.count >= 20, trimmed.count <= 256 else { return false }
+
+        // Keys use only url-safe key characters. This rejects URLs, emails,
+        // file paths, JSON, bitcoin:… and other tokens with :/.@{}& etc.
+        let keyScalars = CharacterSet(charactersIn:
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-")
+        guard trimmed.unicodeScalars.allSatisfy(keyScalars.contains) else { return false }
+
+        // UUIDs / hex-and-hyphen tokens are handled by the identifier checker.
+        if trimmed.allSatisfy({ $0.isHexDigit || $0 == "-" }) { return false }
+
+        let range = NSRange(trimmed.startIndex..., in: trimmed)
+
+        // Custom-prefixed token: short prefix + separator + high-entropy body.
+        if let match = Patterns.genericPrefixedKey.firstMatch(in: trimmed, range: range),
+           match.numberOfRanges > 1,
+           let bodyRange = Range(match.range(at: 1), in: trimmed),
+           looksLikeSecretValue(String(trimmed[bodyRange])) {
+            return true
+        }
+
+        // Long, high-entropy token with no recognised prefix. Require a
+        // separator or mixed case so plain lowercase hashes/words don't match.
+        if trimmed.count >= 32, looksLikeSecretValue(trimmed) {
+            let hasSeparator = trimmed.contains("_") || trimmed.contains("-")
+            let hasMixedCase = trimmed.contains { $0.isUppercase } && trimmed.contains { $0.isLowercase }
+            if hasSeparator || hasMixedCase { return true }
+        }
+
         return false
     }
     

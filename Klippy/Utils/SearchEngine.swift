@@ -6,7 +6,10 @@ class SearchEngine: ObservableObject {
 
     // MARK: - Search Configuration
     private struct SearchConfig {
-        static let maxResults = 500
+        // Ceiling on matches considered/returned. Kept high so searches surface
+        // old matches across the whole history, not just the most recent few.
+        // The results list is virtualized, so large counts render lazily.
+        static let maxResults = 5000
         static let cacheTimeout: TimeInterval = 30
         static let minQueryLength = 1
         static let debounceDelay: TimeInterval = 0.15
@@ -250,13 +253,17 @@ class SearchEngine: ObservableObject {
 
         // Extra safety: verify each result actually contains the query.
         // This guards against any predicate edge case from letting non-matching items through.
-        let trimmedQuery = query.text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let queryTokens = query.text
+            .lowercased()
+            .split(whereSeparator: { $0.isWhitespace })
+            .map(String.init)
         let verified: [ClipboardItemViewModel]
-        if trimmedQuery.isEmpty {
+        if queryTokens.isEmpty {
             verified = primaryResults
         } else {
             verified = primaryResults.filter { item in
-                item.content.lowercased().contains(trimmedQuery)
+                let lowered = item.content.lowercased()
+                return queryTokens.allSatisfy { lowered.contains($0) }
             }
         }
 
@@ -285,30 +292,27 @@ class SearchEngine: ObservableObject {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedText.isEmpty else { return NSPredicate(value: true) }
 
-        let normalizedTerms = trimmedText
-            .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { !$0.isEmpty }
-
-        let exactPredicate = NSPredicate(
-            format: "(searchableContent CONTAINS[cd] %@) OR (content CONTAINS[cd] %@)",
-            trimmedText,
-            trimmedText
-        )
-
-        guard !normalizedTerms.isEmpty else { return exactPredicate }
-
-        let termPredicates = normalizedTerms.map { term in
-            NSPredicate(
+        // Split on WHITESPACE ONLY — never on punctuation. Splitting on
+        // underscores/hyphens turned a literal query like "re_" into the broad
+        // token "re", which matched thousands of items and pushed the real
+        // "re_" matches out of the recency-capped fetch. Each whitespace token
+        // must appear in the item (AND), matching the verification below.
+        let tokens = trimmedText.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        guard !tokens.isEmpty else {
+            return NSPredicate(
                 format: "(searchableContent CONTAINS[cd] %@) OR (content CONTAINS[cd] %@)",
-                term,
-                term
+                trimmedText, trimmedText
             )
         }
 
-        return NSCompoundPredicate(orPredicateWithSubpredicates: [
-            exactPredicate,
-            NSCompoundPredicate(andPredicateWithSubpredicates: termPredicates)
-        ])
+        let tokenPredicates = tokens.map { term in
+            NSPredicate(
+                format: "(searchableContent CONTAINS[cd] %@) OR (content CONTAINS[cd] %@)",
+                term, term
+            )
+        }
+
+        return NSCompoundPredicate(andPredicateWithSubpredicates: tokenPredicates)
     }
 
     private func rankResults(items: [ClipboardItemViewModel], for query: String, limit: Int) -> [ClipboardItemViewModel] {

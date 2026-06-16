@@ -70,6 +70,60 @@ class ClipboardManager: ObservableObject {
         // Startup fallback: persistent stores can finish loading slightly after manager init.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
             self?.refreshHistory()
+            self?.reclassifyMisbinnedKeysIfNeeded()
+        }
+    }
+
+    /// One-time backfill: earlier versions failed to recognise provider-prefixed
+    /// keys (e.g. OpenRouter sk-or-v1-…) and custom-prefixed keys, filing them
+    /// under text/identifier/etc. Re-run the (now improved) classifier over those
+    /// buckets and promote anything that is actually an API key. Runs once.
+    private func reclassifyMisbinnedKeysIfNeeded() {
+        let flag = "didReclassifyContentTypes_v2"
+        guard !UserDefaults.standard.bool(forKey: flag) else { return }
+
+        backgroundContext.perform { [weak self] in
+            guard let self = self else { return }
+            let request: NSFetchRequest<ClipboardItem> = ClipboardItem.fetchRequest()
+            // Buckets a single-token value (key, id, number, url, etc.) can land
+            // in. Re-running the classifier over these both promotes real keys and
+            // demotes anything an earlier pass mistakenly tagged.
+            let candidateTypes: [Int16] = [
+                ContentCategory.text.rawValue,
+                ContentCategory.code.rawValue,
+                ContentCategory.identifier.rawValue,
+                ContentCategory.number.rawValue,
+                ContentCategory.other.rawValue,
+                ContentCategory.apiKey.rawValue,
+                ContentCategory.url.rawValue
+            ]
+            request.predicate = NSPredicate(format: "contentType IN %@", candidateTypes)
+            request.fetchBatchSize = 500
+
+            do {
+                let items = try self.backgroundContext.fetch(request)
+                var changed = 0
+                for item in items {
+                    // Only re-evaluate compact single-token values; leave prose,
+                    // code blocks and large blobs untouched.
+                    guard let content = item.content,
+                          content.count <= 256,
+                          !content.contains(where: { $0.isWhitespace }) else { continue }
+                    let resolved = self.contentClassifier.classify(content).rawValue
+                    if resolved != item.contentType {
+                        item.contentType = resolved
+                        changed += 1
+                    }
+                }
+                if changed > 0 { try self.backgroundContext.save() }
+                UserDefaults.standard.set(true, forKey: flag)
+                print("🔑 Content-type reclassification pass complete (\(changed) corrected)")
+                if changed > 0 {
+                    DispatchQueue.main.async { self.refreshHistory() }
+                }
+            } catch {
+                print("Content-type reclassification failed: \(error)")
+            }
         }
     }
     

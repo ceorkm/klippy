@@ -672,7 +672,7 @@ struct ContentView: View {
             query: searchText,
             category: .merged,
             dateRange: selectedDateRange,
-            limit: 180
+            limit: 5000
         )
         let filtered = applyDateRangeFilter(results)
 
@@ -954,7 +954,7 @@ struct ContentView: View {
             query: searchText,
             category: selectedCategory,
             dateRange: selectedDateRange,
-            limit: 180
+            limit: 5000
         )
         return mergeWithPinned(applyDateRangeFilter(results))
     }
