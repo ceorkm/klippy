@@ -33,8 +33,15 @@ class ContentClassifier {
         )
         
         // Address patterns
+        /// A street line: a house number, a short name, then a street word.
+        ///
+        /// The previous pattern had no word boundary around the suffixes, so
+        /// "St" matched inside "first", "just" and "must", and "Dr" inside
+        /// "hundred". `\s` also crosses newlines, so one number early in a
+        /// document and one ordinary word later made the whole thing an
+        /// address. On real data that mislabelled 1,292 clips.
         static let address = try! NSRegularExpression(
-            pattern: #"\d+\s+[A-Za-z0-9\s,.-]+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Court|Ct|Place|Pl|Way|Circle|Cir)"#,
+            pattern: #"(?:^|\n)\s*\d{1,6}[A-Za-z]?\s+[A-Za-z0-9.\-']+(?:[ ][A-Za-z0-9.\-']+){0,4}\s+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Court|Ct|Place|Pl|Way|Circle|Cir|Terrace|Ter|Parkway|Pkwy|Highway|Hwy)\.?(?:$|[\s,])"#,
             options: [.caseInsensitive]
         )
         
@@ -159,6 +166,10 @@ class ContentClassifier {
             try! NSRegularExpression(pattern: #"\bgithub_pat_[A-Za-z0-9_]{20,}\b"#, options: []),
             try! NSRegularExpression(pattern: #"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"#, options: []),
             try! NSRegularExpression(pattern: #"\bAIza[0-9A-Za-z_-]{35}\b"#, options: []),
+            // Telegram bot token: digits, a colon, then the secret. The leading
+            // digits made these look like phone numbers, so live tokens were
+            // being filed as contact details and shown in the clear.
+            try! NSRegularExpression(pattern: #"\b\d{6,12}:AA[A-Za-z0-9_\-]{30,}\b"#, options: []),
             try! NSRegularExpression(pattern: #"\b(?:sk|pk)_(?:live|test)_[A-Za-z0-9]{16,}\b"#, options: []),
             try! NSRegularExpression(pattern: #"\bxox[baprs]-[0-9A-Za-z-]{10,}\b"#, options: []),
             try! NSRegularExpression(pattern: #"\bhf_[A-Za-z0-9]{30,}\b"#, options: []),
@@ -188,24 +199,45 @@ class ContentClassifier {
         "vm.tiktok.com"
     ]
     
+    /// Every platform whose links belong under Social rather than plain URLs.
+    ///
+    /// Subdomains are covered by the suffix match, so m.youtube.com, mobile
+    /// Twitter and regional hosts all land here without being listed.
+    /// Messaging services are included when people routinely share their links
+    /// (a t.me invite, a wa.me number); work tools like Slack and Teams are
+    /// deliberately not social and stay under URLs.
     private static let socialDomains = [
-        "facebook.com",
-        "fb.com",
-        "x.com",
-        "twitter.com",
-        "t.co",
-        "linkedin.com",
-        "youtube.com",
-        "youtu.be",
-        "reddit.com",
-        "threads.net",
-        "pinterest.com",
-        "snapchat.com",
-        "instagram.com",
-        "tiktok.com",
-        "vm.tiktok.com"
+        // Feeds
+        "facebook.com", "fb.com", "fb.watch",
+        "x.com", "twitter.com", "t.co",
+        "instagram.com", "threads.net", "threads.com",
+        "tiktok.com", "vm.tiktok.com", "douyin.com",
+        "snapchat.com", "bereal.com",
+        "linkedin.com", "lnkd.in",
+        "reddit.com", "redd.it",
+        "pinterest.com", "pin.it",
+        "tumblr.com", "quora.com", "nextdoor.com",
+        "bsky.app", "mastodon.social", "lemmy.world",
+        "truthsocial.com", "gettr.com", "parler.com",
+        "vk.com", "weibo.com", "xiaohongshu.com", "ok.ru",
+        "clubhouse.com",
+
+        // Video and streaming communities
+        "youtube.com", "youtu.be",
+        "twitch.tv", "kick.com", "rumble.com",
+        "vimeo.com", "dailymotion.com",
+
+        // Creator platforms
+        "patreon.com", "onlyfans.com", "substack.com",
+        "soundcloud.com",
+
+        // Messaging people share links from
+        "t.me", "telegram.me", "telegram.org",
+        "wa.me", "whatsapp.com", "chat.whatsapp.com",
+        "discord.com", "discord.gg", "discordapp.com",
+        "line.me", "wechat.com", "signal.group"
     ]
-    
+
     private static let apiKeyPlaceholderWords = [
         "your_api_key",
         "your-token",
@@ -237,20 +269,26 @@ class ContentClassifier {
         if isMarkdown(trimmedContent) { return .markdown }
         
         // Check for specific content types
-        if isEmail(trimmedContent) { return .email }
+        // Beyond this length a clip is a document, not a single value. Phone
+        // numbers, addresses, colours and the like describe one value, so
+        // running those rules over a four megabyte email dump both mislabels it
+        // and costs a full scan of the text to do so.
+        let isSingleValue = trimmedContent.prefix(singleValueLimit + 1).count <= singleValueLimit
+
+        if isSingleValue, isEmail(trimmedContent) { return .email }
         if isInstagramURL(trimmedContent) { return .instagramURL }
         if isTikTokURL(trimmedContent) { return .tiktokURL }
         if isSocialMediaURL(trimmedContent) { return .socialMedia }
         if isURL(trimmedContent) { return .url }
-        if isIPAddress(trimmedContent) { return .ipAddress }
-        if isPhoneNumber(trimmedContent) { return .phone }
-        if isAddress(trimmedContent) { return .address }
-        if isIdentifier(trimmedContent) { return .identifier }
+        if isSingleValue, isIPAddress(trimmedContent) { return .ipAddress }
+        if isSingleValue, isPhoneNumber(trimmedContent) { return .phone }
+        if isSingleValue, isAddress(trimmedContent) { return .address }
+        if isSingleValue, isIdentifier(trimmedContent) { return .identifier }
         if isCode(trimmedContent) { return .code }
-        if isNumber(trimmedContent) { return .number }
-        if isDate(trimmedContent) { return .date }
-        if isColor(trimmedContent) { return .color }
-        if isFilePath(trimmedContent) { return .file }
+        if isSingleValue, isNumber(trimmedContent) { return .number }
+        if isSingleValue, isDate(trimmedContent) { return .date }
+        if isSingleValue, isColor(trimmedContent) { return .color }
+        if isSingleValue, isFilePath(trimmedContent) { return .file }
         
         // Default to text
         return .text
@@ -290,28 +328,65 @@ class ContentClassifier {
         return false
     }
     
+    /// True only when the whole clip is a phone number.
+    ///
+    /// This used to look for a phone pattern *anywhere* in the text, so any
+    /// clip containing a ten digit run became a phone number: Unix timestamps
+    /// are exactly ten digits, and so is the first half of a Telegram bot
+    /// token.
+    ///
+    /// A bare run of digits is treated as a number, not a phone number. People
+    /// copy phone numbers with the punctuation or the country code attached,
+    /// and without either there is nothing to tell 1789405469 apart from any
+    /// other ten digit value.
     private func isPhoneNumber(_ content: String) -> Bool {
-        // Remove common separators and check if it's mostly digits
-        let digitsOnly = content.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
-        
-        if digitsOnly.count >= 10 && digitsOnly.count <= 15 {
-            return Patterns.phone.firstMatch(in: content, range: NSRange(content.startIndex..., in: content)) != nil ||
-                   Patterns.phoneInternational.firstMatch(in: content, range: NSRange(content.startIndex..., in: content)) != nil
-        }
-        
-        return false
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+
+        let allowed = CharacterSet(charactersIn: "+()-. \u{00A0}").union(.decimalDigits)
+        guard trimmed.unicodeScalars.allSatisfy({ allowed.contains($0) }) else { return false }
+
+        let hasCountryCode = trimmed.hasPrefix("+")
+        let hasSeparator = trimmed.dropFirst().contains { "()-. \u{00A0}".contains($0) }
+        guard hasCountryCode || hasSeparator else { return false }
+
+        let digits = trimmed.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
+        return hasCountryCode
+            ? (8...15).contains(digits.count)
+            : (10...11).contains(digits.count)
     }
-    
+
+    /// Longest a clip can be and still be treated as one value rather than a
+    /// document. Generous enough for a postal address or a long URL.
+    private let singleValueLimit = 2_000
+
+    /// Longest a clip can be and still be an address rather than a message
+    /// containing one. Comfortably fits a multi-line international address.
+    private let addressLimit = 200
+
+    private static let addressKeywords: Set<String> = [
+        "street", "avenue", "road", "boulevard", "lane", "drive", "court",
+        "place", "way", "apt", "suite", "unit", "terrace", "parkway", "highway"
+    ]
+
     private func isAddress(_ content: String) -> Bool {
-        let hasAddressPattern = Patterns.address.firstMatch(in: content, range: NSRange(content.startIndex..., in: content)) != nil
-        let hasZipCode = Patterns.zipCode.firstMatch(in: content, range: NSRange(content.startIndex..., in: content)) != nil
-        
-        // Look for address keywords
-        let addressKeywords = ["street", "avenue", "road", "boulevard", "lane", "drive", "court", "place", "way", "apt", "suite", "unit"]
-        let lowercaseContent = content.lowercased()
-        let hasAddressKeywords = addressKeywords.contains { lowercaseContent.contains($0) }
-        
-        return hasAddressPattern || (hasZipCode && hasAddressKeywords)
+        // A postal address is short. Anything longer is a message that happens
+        // to quote one, such as a booking confirmation or a company footer, and
+        // filing that under Addresses hides it from where the user will look.
+        guard content.prefix(addressLimit + 1).count <= addressLimit else { return false }
+
+        let range = NSRange(content.startIndex..., in: content)
+        if Patterns.address.firstMatch(in: content, range: range) != nil { return true }
+
+        guard Patterns.zipCode.firstMatch(in: content, range: range) != nil else { return false }
+
+        // Whole words only. Substring matching meant "always" contained "way",
+        // "opportunity" contained "unit" and "replace" contained "place", so a
+        // five digit number anywhere plus any ordinary prose was an address.
+        let words = content.lowercased()
+            .split(whereSeparator: { !$0.isLetter })
+            .map(String.init)
+        return words.contains { Self.addressKeywords.contains($0) }
     }
     
     private func isCode(_ content: String) -> Bool {
@@ -428,24 +503,32 @@ class ContentClassifier {
         return score >= 2
     }
     
-    private func isNumber(_ content: String) -> Bool {
-        // Check for pure numbers
-        if Patterns.number.firstMatch(in: content, range: NSRange(content.startIndex..., in: content)) != nil {
-            return true
+    /// True when the pattern accounts for the entire clip, ignoring surrounding
+    /// whitespace.
+    ///
+    /// Asking whether a pattern appears *somewhere* is the wrong question for a
+    /// clip that is meant to BE one value. Matching anywhere turned a log file
+    /// into a date, a stylesheet into a colour and a credentials dump into a
+    /// number, because each of those contains something of the right shape.
+    private func matchesEntirely(_ regexes: [NSRegularExpression], _ content: String) -> Bool {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let range = NSRange(trimmed.startIndex..., in: trimmed)
+        return regexes.contains { regex in
+            regex.firstMatch(in: trimmed, range: range)?.range == range
         }
-        
-        // Check for currency
-        return Patterns.currency.firstMatch(in: content, range: NSRange(content.startIndex..., in: content)) != nil
     }
-    
+
+    private func isNumber(_ content: String) -> Bool {
+        matchesEntirely([Patterns.number, Patterns.currency], content)
+    }
+
     private func isDate(_ content: String) -> Bool {
-        return Patterns.date.firstMatch(in: content, range: NSRange(content.startIndex..., in: content)) != nil ||
-               Patterns.dateWords.firstMatch(in: content, range: NSRange(content.startIndex..., in: content)) != nil
+        matchesEntirely([Patterns.date, Patterns.dateWords], content)
     }
-    
+
     private func isColor(_ content: String) -> Bool {
-        return Patterns.hexColor.firstMatch(in: content, range: NSRange(content.startIndex..., in: content)) != nil ||
-               Patterns.rgbColor.firstMatch(in: content, range: NSRange(content.startIndex..., in: content)) != nil
+        matchesEntirely([Patterns.hexColor, Patterns.rgbColor], content)
     }
     
     private func isIPAddress(_ content: String) -> Bool {
@@ -840,28 +923,60 @@ class ContentClassifier {
         return false
     }
     
+    /// Structural markdown: things that only appear because someone is writing
+    /// markdown, anchored to the start of a line.
+    private static let markdownStructure: [NSRegularExpression] = [
+        try! NSRegularExpression(pattern: #"^#{1,6}\s+\S"#, options: [.anchorsMatchLines]),
+        try! NSRegularExpression(pattern: #"^\s*[-*+]\s+\S"#, options: [.anchorsMatchLines]),
+        try! NSRegularExpression(pattern: #"^\s*\d+\.\s+\S"#, options: [.anchorsMatchLines]),
+        try! NSRegularExpression(pattern: #"^\s*>\s+\S"#, options: [.anchorsMatchLines]),
+        try! NSRegularExpression(pattern: #"^\s*```"#, options: [.anchorsMatchLines]),
+        try! NSRegularExpression(pattern: #"^\s*\|?\s*:?-{3,}:?\s*\|"#, options: [.anchorsMatchLines])
+    ]
+
+    private static let markdownFence = try! NSRegularExpression(
+        pattern: #"^\s*```"#, options: [.anchorsMatchLines])
+
+    /// Inline markdown. On its own this proves nothing, so it only ever counts
+    /// alongside a structural marker.
+    private static let markdownInline: [NSRegularExpression] = [
+        try! NSRegularExpression(pattern: #"\*\*\S[^*]*\S\*\*"#, options: []),
+        try! NSRegularExpression(pattern: #"\[[^\]]+\]\([^)]+\)"#, options: [])
+    ]
+
+    /// True when the clip reads as a markdown document.
+    ///
+    /// Previously this counted every match of eight patterns and called
+    /// anything with two or more markdown. That meant a file of `#` comments
+    /// such as /etc/hosts scored once per line, and a stylesheet matched the
+    /// italic rule twice on `*, *::before`. React sources, HTML pages and XML
+    /// config were all filed as markdown as a result.
+    ///
+    /// Now it needs at least two *different* kinds of marker, one of them
+    /// structural, and it refuses anything that opens like markup. The patterns
+    /// are also built once rather than recompiled on every call, which used to
+    /// happen on the capture path ten times a second.
     private func isMarkdown(_ content: String) -> Bool {
-        let markdownPatterns = [
-            "^#{1,6}\\s+", // Headers
-            "\\*\\*.*\\*\\*", // Bold
-            "\\*.*\\*", // Italic
-            "^\\s*[-*+]\\s+", // Lists
-            "^\\s*\\d+\\.\\s+", // Numbered lists
-            "```", // Code blocks
-            "\\[.*\\]\\(.*\\)", // Links
-            "^>\\s+" // Blockquotes
-        ]
-        
-        let markdownCount = markdownPatterns.reduce(0) { count, pattern in
-            if let regex = try? NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines]) {
-                return count + regex.matches(in: content, range: NSRange(content.startIndex..., in: content)).count
-            }
-            return count
-        }
-        
-        return markdownCount >= 2
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.hasPrefix("<") else { return false }
+
+        let range = NSRange(trimmed.startIndex..., in: trimmed)
+
+        // A fenced block settles it on its own. Nothing but markdown opens a
+        // line with ```, so it needs no corroboration.
+        if Self.markdownFence.firstMatch(in: trimmed, range: range) != nil { return true }
+
+        let structural = Self.markdownStructure.filter {
+            $0.firstMatch(in: trimmed, range: range) != nil
+        }.count
+        guard structural >= 1 else { return false }
+
+        let inline = Self.markdownInline.filter {
+            $0.firstMatch(in: trimmed, range: range) != nil
+        }.count
+        return structural + inline >= 2
     }
-    
+
     private func extractPrimaryURL(from content: String) -> URL? {
         let fullRange = NSRange(content.startIndex..., in: content)
         

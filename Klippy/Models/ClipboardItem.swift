@@ -30,6 +30,32 @@ enum ContentCategory: Int16, CaseIterable {
     case identifier = 21
     case merged = 22
     case other = 99
+
+    /// Every category that is really a web link.
+    ///
+    /// The classifier files social links under their own categories, so a
+    /// TikTok or Reddit URL is not `.url`. Anything that treats a clip as a
+    /// link has to ask this instead of comparing against `.url`, or it silently
+    /// ignores exactly the links people paste most.
+    static let linkCategories: Set<ContentCategory> = [.url, .socialMedia, .instagramURL, .tiktokURL]
+
+    static let socialCategories: Set<ContentCategory> = [.socialMedia, .instagramURL, .tiktokURL]
+
+    var isLink: Bool { Self.linkCategories.contains(self) }
+
+    /// True when a clip in `self` belongs under the `filter` tab.
+    ///
+    /// Every clip lands in exactly one tab. The Social tab gathers the three
+    /// social link categories, which otherwise have no tab of their own, and
+    /// the URLs tab holds the rest. They deliberately do not overlap: a TikTok
+    /// link showing under both made neither tab mean anything.
+    func matches(_ filter: ContentCategory) -> Bool {
+        switch filter {
+        case .all: return true
+        case .socialMedia: return Self.socialCategories.contains(self)
+        default: return self == filter
+        }
+    }
     
     var displayName: String {
         switch self {
@@ -131,6 +157,7 @@ public class ClipboardItem: NSManagedObject {
     @NSManaged public var lastAccessedAt: Date?
     @NSManaged public var usageCount: Int32
     @NSManaged public var sourceApplication: String?
+    @NSManaged public var sourceBundleIdentifier: String?
     @NSManaged public var tags: String?
 
     // Image-related properties
@@ -169,6 +196,7 @@ extension ClipboardItem {
         content: String,
         category: ContentCategory,
         sourceApp: String? = nil,
+        sourceBundleID: String? = nil,
         context: NSManagedObjectContext
     ) -> ClipboardItem {
         let item = ClipboardItem(context: context)
@@ -176,6 +204,7 @@ extension ClipboardItem {
         item.content = content
         item.categoryEnum = category
         item.sourceApplication = sourceApp
+        item.sourceBundleIdentifier = sourceBundleID
         item.createdAt = Date()
         item.lastAccessedAt = Date()
         item.usageCount = 0
@@ -191,6 +220,7 @@ extension ClipboardItem {
         width: Int32,
         height: Int32,
         sourceApp: String? = nil,
+        sourceBundleID: String? = nil,
         context: NSManagedObjectContext
     ) -> ClipboardItem {
         let item = ClipboardItem(context: context)
@@ -198,6 +228,7 @@ extension ClipboardItem {
         item.content = "Image (\(width)×\(height))" // Descriptive text for search
         item.categoryEnum = .image
         item.sourceApplication = sourceApp
+        item.sourceBundleIdentifier = sourceBundleID
         item.createdAt = Date()
         item.lastAccessedAt = Date()
         item.usageCount = 0
@@ -266,6 +297,7 @@ struct ClipboardItemViewModel: Identifiable {
     let lastAccessedAt: Date
     let usageCount: Int32
     let sourceApplication: String?
+    let sourceBundleIdentifier: String?
 
     // Image-related properties
     let isImage: Bool
@@ -281,6 +313,7 @@ struct ClipboardItemViewModel: Identifiable {
         self.lastAccessedAt = clipboardItem.lastAccessedAt ?? Date()
         self.usageCount = clipboardItem.usageCount
         self.sourceApplication = clipboardItem.sourceApplication
+        self.sourceBundleIdentifier = clipboardItem.sourceBundleIdentifier
         self.isImage = clipboardItem.isImage
         self.imageData = clipboardItem.imageData
         self.imageWidth = clipboardItem.imageWidth
@@ -296,6 +329,7 @@ struct ClipboardItemViewModel: Identifiable {
         lastAccessedAt: Date = Date(),
         usageCount: Int32 = 0,
         sourceApplication: String? = nil,
+        sourceBundleIdentifier: String? = nil,
         isImage: Bool = false,
         imageData: Data? = nil,
         imageWidth: Int32 = 0,
@@ -308,6 +342,7 @@ struct ClipboardItemViewModel: Identifiable {
         self.lastAccessedAt = lastAccessedAt
         self.usageCount = usageCount
         self.sourceApplication = sourceApplication
+        self.sourceBundleIdentifier = sourceBundleIdentifier
         self.isImage = isImage
         self.imageData = imageData
         self.imageWidth = imageWidth
@@ -318,8 +353,13 @@ struct ClipboardItemViewModel: Identifiable {
         if isMergedClip {
             return mergedComponents.joined(separator: "  •  ")
         }
+        // Comparing against a prefix rather than asking for the full count.
+        // String.count walks every grapheme, so on a multi-megabyte clip this
+        // ran for tens of milliseconds on the main thread every time the row
+        // was laid out.
         let maxLength = 200
-        if content.count > maxLength {
+        let head = content.prefix(maxLength + 1)
+        if head.count > maxLength {
             return String(content.prefix(maxLength)) + "..."
         }
         return content
@@ -327,6 +367,28 @@ struct ClipboardItemViewModel: Identifiable {
 
     var isMergedClip: Bool {
         MergedClipCodec.isMerged(content)
+    }
+
+    /// Categories the classifier already recognises as secrets. These are masked
+    /// in the list until the user asks to see them, so a shoulder-glance at the
+    /// panel never exposes a key or a card number.
+    var isSensitive: Bool {
+        switch category {
+        case .apiKey, .paymentCard:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// A same-shape stand-in for masked content: keeps the last four characters
+    /// so a key stays recognisable without being readable.
+    var maskedText: String {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > 4 else { return String(repeating: "•", count: max(trimmed.count, 4)) }
+        let visible = trimmed.suffix(4)
+        let hidden = min(trimmed.count - 4, 28)
+        return String(repeating: "•", count: hidden) + visible
     }
 
     var mergedComponents: [String] {
@@ -356,14 +418,29 @@ struct ClipboardItemViewModel: Identifiable {
             .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
 
-        return candidates.map { candidate in
+        return candidates.compactMap { candidate in
             if let url = URL(string: candidate), url.isFileURL {
                 return ClipboardFileReference(url: url, bookmarkData: nil)
             }
 
+            // Only an absolute path counts. This used to hand every candidate to
+            // URL(fileURLWithPath:), which happily turns any text into a
+            // relative path: an image clip labelled "Image (764x1024)" came back
+            // as a file inside the app's own container, and dragging it offered
+            // a file that has never existed.
+            guard Self.looksLikeAbsolutePath(candidate) else { return nil }
+
             let expandedPath = (candidate as NSString).expandingTildeInPath
             return ClipboardFileReference(url: URL(fileURLWithPath: expandedPath), bookmarkData: nil)
         }
+    }
+
+    /// True only for text shaped like a path rooted somewhere real.
+    ///
+    /// Deliberately a shape test and not a check on disk: this runs while rows
+    /// are being drawn, and a stat per row per redraw is not free.
+    private static func looksLikeAbsolutePath(_ candidate: String) -> Bool {
+        candidate.hasPrefix("/") || candidate.hasPrefix("~/") || candidate == "~"
     }
 
     var fileURLs: [URL] {

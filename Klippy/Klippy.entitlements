@@ -2,7 +2,20 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- Required by App Store guideline 2.4.5(i). -->
 	<key>com.apple.security.app-sandbox</key>
-	<false/>
+	<true/>
+
+	<!-- Outbound only, and only for "Load link previews": Klippy asks a site
+	     you copied for its own preview image. Nothing is ever sent elsewhere,
+	     and the app never listens for connections. -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+
+	<!-- Export a history file, and read an image file that was copied in
+	     Finder. Both are files the user picks or puts on the clipboard
+	     themselves; Klippy never browses the disk on its own. -->
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
 </dict>
 </plist>

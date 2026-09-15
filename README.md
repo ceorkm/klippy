@@ -1,232 +1,116 @@
-# Klippy - High-Performance macOS Clipboard Manager
+# Klippy
 
-Klippy is a high-performance macOS clipboard manager built with SwiftUI, designed to handle extremely large clipboard histories (up to 3+ million items) without performance degradation.
+A clipboard manager for macOS that lives in the menu bar. Everything you copy
+stays on your Mac.
 
-## Features
+Native SwiftUI and AppKit, no Electron, no account, no telemetry.
 
-### 🚀 **High Performance**
-- **Handles 3+ million clipboard items** without performance issues
-- **Virtual scrolling** for efficient rendering of large datasets
-- **Intelligent caching** with automatic memory management
-- **Background processing** to keep UI responsive
-- **Optimized Core Data** with SQLite WAL mode and custom indexing
+Requires macOS 13 or later.
 
-### 🧠 **Smart Content Classification**
-- **Rule-based categorization** using regex patterns (no AI required)
-- **14 content types**: URLs, emails, phone numbers, addresses, code, images, files, numbers, dates, colors, JSON, XML, Markdown, and more
-- **Automatic duplicate detection** using content hashing
-- **Source application tracking**
+## What it does
 
-### 🔍 **Advanced Search**
-- **Instant search** with sub-millisecond response times
-- **Advanced search operators**: `type:url`, `"exact phrases"`, `-exclude`, `+required`
-- **Category filtering** and date range searches
-- **Search result caching** for improved performance
-- **Fuzzy matching** and relevance scoring
+**Keeps your history.** Every copy lands in a searchable list, grouped by day.
+Text, images, files, colours. Click one to put it back on the clipboard.
 
-### 🎨 **Clean UI/UX**
-- **Native macOS menu bar app** with SwiftUI
-- **Virtual scrolling** for smooth performance with large datasets
-- **Visual content previews** with syntax highlighting
-- **Hover effects** and contextual actions
-- **Keyboard shortcuts** and quick access
-- **Dark/light mode support**
+**Sorts it for you.** Klippy reads what you copied and files it: links, social
+links, images, files, colours, code, emails, API keys, card numbers, JSON,
+Markdown, numbers, dates, phone numbers, addresses, IP addresses. Filter by any
+of them, or by date, including a custom range.
 
-### 📊 **Performance Monitoring**
-- **Real-time memory usage tracking**
-- **Search performance metrics**
-- **Automatic cleanup** of old unused items
-- **Memory pressure handling**
-- **Performance reporting**
+**Pin, save, merge.** Pin a clip to keep it at the top. Save one to snippets
+with a name. Select several and merge them into a single clip, then expand it
+again later to see the parts.
 
-## Architecture
+**Gets out of your way.** Ctrl-Cmd-V opens the panel. Ctrl-Cmd-1 through 0
+recall a slot directly. Ctrl-Cmd-Down walks back through recent clips. Every
+shortcut can be rebound in Settings.
 
-### Core Components
+**Looks how you want.** Seven skins, two flat and five photographic, plus panel
+width and text size.
 
-1. **ClipboardManager**: Monitors system clipboard and manages data persistence
-2. **ContentClassifier**: Rule-based content categorization engine
-3. **SearchEngine**: High-performance search with caching and indexing
-4. **VirtualScrollView**: Efficient rendering for large datasets
-5. **PerformanceManager**: Memory management and optimization
+## Privacy
 
-### Performance Optimizations
+This is a clipboard manager, so it is worth being specific.
 
-- **Core Data with WAL mode** for optimal database performance
-- **Background context processing** to avoid blocking UI
-- **Intelligent caching** with automatic expiration
-- **Virtual scrolling** to render only visible items
-- **Memory pressure monitoring** with automatic cleanup
-- **Batch operations** for bulk data processing
+- Your history is stored in `~/Library/Application Support/Klippy` and is never
+  uploaded anywhere. There is no server and no account.
+- Klippy skips anything an app marks as concealed, so password managers like
+  1Password and Bitwarden are ignored rather than recorded. This follows the
+  [nspasteboard.org](http://nspasteboard.org) convention and is on by default.
+- You can mark any clip secret by hand to hide its contents in the list.
+- Klippy needs no Accessibility permission, no Screen Recording permission and
+  no Full Disk Access. The global shortcuts use a system API that does not
+  require handing over control of your Mac.
 
-### Data Model
+**The one network feature.** "Load link previews" in Settings asks a site you
+copied for its own preview image, the way a chat app shows a thumbnail. The
+request goes to that site and nowhere else. Brand icons for common sites are
+built into the app so those need no request at all. Turn the setting off and
+Klippy never touches the network.
 
-```swift
-ClipboardItem {
-    id: UUID
-    content: String
-    contentType: ContentCategory
-    contentHash: String
-    searchableContent: String
-    createdAt: Date
-    lastAccessedAt: Date
-    usageCount: Int32
-    sourceApplication: String?
-    tags: String?
-}
+Full details in [PRIVACY.md](PRIVACY.md).
+
+## Build it
+
+```sh
+git clone https://github.com/ceorkm/klippy.git
+cd klippy
+xcodebuild -project Klippy.xcodeproj -scheme Klippy -configuration Debug build
 ```
 
-## Building and Running
+Or open `Klippy.xcodeproj` in Xcode and press Run.
 
-### Requirements
-- macOS 13.0+
-- Swift 5.9+
-- Xcode 15.0+ (optional, for development)
+Tests:
 
-### Quick Start with Swift Package Manager
-
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/ceorkm/klippy.git
-   cd klippy
-   ```
-
-2. **Build and run with Swift Package Manager**:
-   ```bash
-   # Build the project
-   swift build
-
-   # Run the application
-   swift run
-
-   # Or use the build script
-   ./build.sh
-   ```
-
-3. **Run tests**:
-   ```bash
-   swift test
-   ```
-
-4. **Build for release**:
-   ```bash
-   swift build -c release
-
-   # The executable will be at:
-   # .build/release/Klippy
-   ```
-
-### Alternative: Xcode Development
-
-1. **Open Package.swift in Xcode**:
-   ```bash
-   open Package.swift
-   ```
-
-2. **Build and run**:
-   - Select the Klippy scheme
-   - Press Cmd+R to build and run
-
-### Configuration
-
-The app runs as a menu bar application and requires no additional configuration. All data is stored locally using Core Data.
-
-## Performance Benchmarks
-
-### Target Performance Metrics
-- **3+ million items**: No performance degradation
-- **Search response time**: < 100ms for any query
-- **Memory usage**: < 500MB for 1M items
-- **UI responsiveness**: 60fps scrolling with virtual rendering
-- **Startup time**: < 2 seconds with 1M items
-
-### Optimization Features
-- **Virtual scrolling**: Renders only visible items (typically 10-20)
-- **Search caching**: 30-second cache with 90%+ hit rate
-- **Background processing**: All heavy operations off main thread
-- **Memory management**: Automatic cleanup of old unused items
-- **Database optimization**: SQLite WAL mode with custom indexes
-
-## Content Classification
-
-Klippy automatically categorizes clipboard content using rule-based patterns:
-
-- **URLs**: HTTP/HTTPS links and domain patterns
-- **Emails**: RFC-compliant email address patterns
-- **Phone Numbers**: Various international formats
-- **Addresses**: Street addresses with zip codes
-- **Code**: Programming languages, HTML, function calls
-- **Numbers**: Integers, decimals, currency
-- **Dates**: Multiple date formats
-- **Colors**: Hex codes, RGB values
-- **Files**: File paths and names
-- **JSON/XML**: Structured data formats
-- **Markdown**: Markdown syntax patterns
-
-## Search Operators
-
-Klippy supports advanced search syntax:
-
-```
-type:url                    # Filter by content type
-"exact phrase"              # Exact phrase matching
--exclude                    # Exclude terms
-+required                   # Required terms
-type:code "function"        # Combined operators
+```sh
+xcodebuild test -project Klippy.xcodeproj -scheme Klippy -destination 'platform=macOS'
 ```
 
-## Memory Management
+## Release
 
-- **Automatic cleanup** of items older than 90 days with zero usage
-- **Memory pressure handling** with aggressive cleanup when needed
-- **Cache expiration** to prevent memory leaks
-- **Background optimization** of Core Data store
-- **Configurable limits** for maximum items and memory usage
+`package.sh` builds, signs with a Developer ID certificate, notarizes and
+staples a DMG. It reads the signing identity from `.release.env`, which is not
+committed. Copy `.release.env.example` and fill in your own values.
 
-## Contributing
+## How it is put together
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests for new functionality
-5. Submit a pull request
+| Piece | Job |
+| --- | --- |
+| `Managers/ClipboardManager` | Watches the pasteboard, stores clips, handles copy-back |
+| `Utils/ContentClassifier` | Decides what a clip is, using rules rather than a model |
+| `Utils/SearchEngine` | Search and filtering over Core Data |
+| `Views/PanelController` | Owns the menu bar item, the panel and the global shortcuts |
+| `Views/KlippyPanel` | The panel itself |
+| `Utils/Skin` | Colour tokens for the seven skins |
+| `Utils/SiteIcon` | Brand icons for copied links |
 
-## License
+Storage is Core Data on SQLite in WAL mode, with writes on a background context
+so the panel never waits on the disk.
 
-MIT License. See [LICENSE](LICENSE) for details.
+## Credits
 
-## Troubleshooting
+Brand icons come from [Simple Icons](https://github.com/simple-icons/simple-icons),
+released under CC0-1.0. Each brand's mark remains the trademark of its owner and
+is used here only to identify that site.
 
-### Performance Issues
-- Check memory usage in Activity Monitor
-- Use the built-in performance report: View → Performance Report
-- Clear caches: Settings → Clear All Caches
+## Licence
 
-### Search Not Working
-- Verify search index integrity
-- Restart the application
-- Check for Core Data errors in Console.app
+MIT. See [LICENSE](LICENSE).
 
-### High Memory Usage
-- Enable automatic cleanup in settings
-- Manually clear old items: Settings → Clear Old Items
-- Reduce maximum item limit
+## The mascot
 
-## Technical Details
+Klippy's mark is not an image file. It lives in `design/mark/klippy.py` as
+geometry: `sample(t)` returns a pose, `svg(pose)` draws it, and the PNGs and the
+menu bar icon are that SVG rasterised. Shapes, colours and expressions are
+catalogues, so adding one is a row in a table.
 
-### Database Schema
-- **Optimized indexes** on searchableContent, createdAt, contentType
-- **WAL mode** for better concurrent access
-- **Batch operations** for bulk inserts/deletes
-- **Foreign key constraints** for data integrity
+    cd design/mark
+    python3 test_klippy.py        # the engine
+    python3 build_showcase.py     # writes showcase.html
+    python3 test_showcase.py      # checks the page and the engine still agree
 
-### Search Implementation
-- **Full-text search** on searchableContent field
-- **Compound predicates** for complex queries
-- **Result caching** with automatic expiration
-- **Relevance scoring** based on usage and recency
-
-### UI Performance
-- **Virtual scrolling** with 10-item buffer
-- **Lazy loading** of content previews
-- **Debounced search** to prevent excessive queries
-- **Background image loading** for visual content
+The face model, eyes as holes in a mask, the head as a sphere the eyes ride on,
+and solving eye placement once at import rather than every frame, is taken from
+[jeremy-prt/bloub](https://github.com/jeremy-prt/bloub) (MIT), an SVG recreation
+of the x.ai avatar. Their write-up on why a per-frame solver makes eyes tremble
+is worth reading.

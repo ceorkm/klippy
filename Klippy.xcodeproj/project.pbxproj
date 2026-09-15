@@ -8,43 +8,80 @@
 
 /* Begin PBXBuildFile section */
 		A1000001000000000000001 /* KlippyApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002000000000000001 /* KlippyApp.swift */; };
-		A1000003000000000000001 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000004000000000000001 /* ContentView.swift */; };
 		A1000005000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1000006000000000000001 /* Assets.xcassets */; };
 		A1000007000000000000001 /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1000008000000000000001 /* Preview Assets.xcassets */; };
 		A1000009000000000000001 /* ClipboardManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000010000000000000001 /* ClipboardManager.swift */; };
 		A1000011000000000000001 /* ClipboardItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000012000000000000001 /* ClipboardItem.swift */; };
 		A1000013000000000000001 /* ContentClassifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000014000000000000001 /* ContentClassifier.swift */; };
+		BB00000000000000000000F1 /* ShortcutStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB00000000000000000000F2 /* ShortcutStore.swift */; };
+		BB0000000000000000000F01 /* AppLock.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000F02 /* AppLock.swift */; };
+		BB0000000000000000000E01 /* DragExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000E02 /* DragExport.swift */; };
+		BB0000000000000000000C01 /* Log.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000C02 /* Log.swift */; };
+		BB0000000000000000000B03 /* LaunchAtLoginHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000B04 /* LaunchAtLoginHelper.swift */; };
+		BB0000000000000000000B01 /* ItemDateFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000B02 /* ItemDateFilter.swift */; };
+		BB0000000000000000000A01 /* SiteIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000A02 /* SiteIcon.swift */; };
+		BB00000000000000000000E1 /* LinkPreviewStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB00000000000000000000E2 /* LinkPreviewStore.swift */; };
+		BB00000000000000000000B1 /* ClipboardPrivacy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB00000000000000000000B2 /* ClipboardPrivacy.swift */; };
+		BB00000000000000000000B3 /* ClipCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB00000000000000000000B4 /* ClipCardView.swift */; };
+		BB00000000000000000000B5 /* KlippyPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB00000000000000000000B6 /* KlippyPanel.swift */; };
+		BB00000000000000000000B7 /* PanelSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB00000000000000000000B8 /* PanelSettingsView.swift */; };
+		BB00000000000000000000A1 /* Skin.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB00000000000000000000A2 /* Skin.swift */; };
+		BB00000000000000000000A3 /* AppIconProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB00000000000000000000A4 /* AppIconProvider.swift */; };
 		A1000015000000000000001 /* SearchEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000016000000000000001 /* SearchEngine.swift */; };
 		A1000017000000000000001 /* DataModel.xcdatamodeld in Resources */ = {isa = PBXBuildFile; fileRef = A1000018000000000000001 /* DataModel.xcdatamodeld */; };
-		A1000040000000000000001 /* KlippyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000041000000000000001 /* KlippyTests.swift */; };
-		A1000043000000000000001 /* VirtualScrollView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000042000000000000001 /* VirtualScrollView.swift */; };
+		BB00000000000000000000D1 /* PanelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB00000000000000000000D2 /* PanelController.swift */; };
+		BB00000000000000000000C1 /* DateRangePopover.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB00000000000000000000C2 /* DateRangePopover.swift */; };
 		A1000050000000000000001 /* SavedSnippet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000051000000000000001 /* SavedSnippet.swift */; };
 		A1000052000000000000001 /* SnippetManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000053000000000000001 /* SnippetManager.swift */; };
-		A1000054000000000000001 /* SnippetEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000055000000000000001 /* SnippetEditorView.swift */; };
 		A1000056000000000000001 /* FeedbackManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000057000000000000001 /* FeedbackManager.swift */; };
+		CC0000000000000000000005 /* KlippyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC0000000000000000000004 /* KlippyTests.swift */; };
+		BB0000000000000000000D01 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000D02 /* PrivacyInfo.xcprivacy */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		A1000000000000000000001 /* Klippy.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Klippy.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1000002000000000000001 /* KlippyApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KlippyApp.swift; sourceTree = "<group>"; };
-		A1000004000000000000001 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A1000006000000000000001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A1000008000000000000001 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
 		A1000010000000000000001 /* ClipboardManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardManager.swift; sourceTree = "<group>"; };
 		A1000012000000000000001 /* ClipboardItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardItem.swift; sourceTree = "<group>"; };
 		A1000014000000000000001 /* ContentClassifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentClassifier.swift; sourceTree = "<group>"; };
+		BB00000000000000000000F2 /* ShortcutStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutStore.swift; sourceTree = "<group>"; };
+		BB0000000000000000000F02 /* AppLock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLock.swift; sourceTree = "<group>"; };
+		BB0000000000000000000E02 /* DragExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DragExport.swift; sourceTree = "<group>"; };
+		BB0000000000000000000C02 /* Log.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Log.swift; sourceTree = "<group>"; };
+		BB0000000000000000000B04 /* LaunchAtLoginHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchAtLoginHelper.swift; sourceTree = "<group>"; };
+		BB0000000000000000000B02 /* ItemDateFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ItemDateFilter.swift; sourceTree = "<group>"; };
+		BB0000000000000000000A02 /* SiteIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteIcon.swift; sourceTree = "<group>"; };
+		BB00000000000000000000E2 /* LinkPreviewStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkPreviewStore.swift; sourceTree = "<group>"; };
+		BB00000000000000000000B2 /* ClipboardPrivacy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardPrivacy.swift; sourceTree = "<group>"; };
+		BB00000000000000000000B4 /* ClipCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipCardView.swift; sourceTree = "<group>"; };
+		BB00000000000000000000B6 /* KlippyPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KlippyPanel.swift; sourceTree = "<group>"; };
+		BB00000000000000000000B8 /* PanelSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelSettingsView.swift; sourceTree = "<group>"; };
+		BB00000000000000000000A2 /* Skin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Skin.swift; sourceTree = "<group>"; };
+		BB00000000000000000000A4 /* AppIconProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIconProvider.swift; sourceTree = "<group>"; };
 		A1000016000000000000001 /* SearchEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchEngine.swift; sourceTree = "<group>"; };
 		A1000019000000000000001 /* DataModel.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = DataModel.xcdatamodel; sourceTree = "<group>"; };
 		A1000020000000000000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		A1000042000000000000001 /* VirtualScrollView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualScrollView.swift; sourceTree = "<group>"; };
+		BB00000000000000000000D2 /* PanelController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelController.swift; sourceTree = "<group>"; };
+		BB00000000000000000000C2 /* DateRangePopover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DateRangePopover.swift; sourceTree = "<group>"; };
 		A1000051000000000000001 /* SavedSnippet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedSnippet.swift; sourceTree = "<group>"; };
 		A1000053000000000000001 /* SnippetManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnippetManager.swift; sourceTree = "<group>"; };
-		A1000055000000000000001 /* SnippetEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnippetEditorView.swift; sourceTree = "<group>"; };
 		A1000057000000000000001 /* FeedbackManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedbackManager.swift; sourceTree = "<group>"; };
+		CC0000000000000000000004 /* KlippyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KlippyTests.swift; sourceTree = "<group>"; };
+		CC0000000000000000000002 /* KlippyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = KlippyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		BB0000000000000000000D02 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		A1000021000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CC0000000000000000000007 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -58,6 +95,7 @@
 			isa = PBXGroup;
 			children = (
 				A1000023000000000000001 /* Klippy */,
+				CC0000000000000000000003 /* KlippyTests */,
 				A1000024000000000000001 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -66,13 +104,13 @@
 			isa = PBXGroup;
 			children = (
 				A1000002000000000000001 /* KlippyApp.swift */,
-				A1000004000000000000001 /* ContentView.swift */,
 				A1000025000000000000001 /* Models */,
 				A1000026000000000000001 /* Managers */,
 				A1000027000000000000001 /* Views */,
 				A1000028000000000000001 /* Utils */,
 				A1000006000000000000001 /* Assets.xcassets */,
 				A1000020000000000000001 /* Info.plist */,
+				BB0000000000000000000D02 /* PrivacyInfo.xcprivacy */,
 				A1000018000000000000001 /* DataModel.xcdatamodeld */,
 				A1000029000000000000001 /* Preview Content */,
 			);
@@ -83,6 +121,7 @@
 			isa = PBXGroup;
 			children = (
 				A1000000000000000000001 /* Klippy.app */,
+				CC0000000000000000000002 /* KlippyTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -108,8 +147,11 @@
 		A1000027000000000000001 /* Views */ = {
 			isa = PBXGroup;
 			children = (
-				A1000042000000000000001 /* VirtualScrollView.swift */,
-				A1000055000000000000001 /* SnippetEditorView.swift */,
+				BB00000000000000000000D2 /* PanelController.swift */,
+				BB00000000000000000000C2 /* DateRangePopover.swift */,
+				BB00000000000000000000B4 /* ClipCardView.swift */,
+				BB00000000000000000000B6 /* KlippyPanel.swift */,
+				BB00000000000000000000B8 /* PanelSettingsView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -118,6 +160,17 @@
 			isa = PBXGroup;
 			children = (
 				A1000014000000000000001 /* ContentClassifier.swift */,
+				BB00000000000000000000F2 /* ShortcutStore.swift */,
+				BB0000000000000000000F02 /* AppLock.swift */,
+				BB0000000000000000000E02 /* DragExport.swift */,
+				BB0000000000000000000C02 /* Log.swift */,
+				BB0000000000000000000B04 /* LaunchAtLoginHelper.swift */,
+				BB0000000000000000000B02 /* ItemDateFilter.swift */,
+				BB0000000000000000000A02 /* SiteIcon.swift */,
+				BB00000000000000000000E2 /* LinkPreviewStore.swift */,
+				BB00000000000000000000B2 /* ClipboardPrivacy.swift */,
+				BB00000000000000000000A2 /* Skin.swift */,
+				BB00000000000000000000A4 /* AppIconProvider.swift */,
 				A1000016000000000000001 /* SearchEngine.swift */,
 				A1000057000000000000001 /* FeedbackManager.swift */,
 			);
@@ -130,6 +183,14 @@
 				A1000008000000000000001 /* Preview Assets.xcassets */,
 			);
 			path = "Preview Content";
+			sourceTree = "<group>";
+		};
+		CC0000000000000000000003 /* KlippyTests */ = {
+			isa = PBXGroup;
+			children = (
+				CC0000000000000000000004 /* KlippyTests.swift */,
+			);
+			path = KlippyTests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -152,7 +213,42 @@
 			productReference = A1000000000000000000001 /* Klippy.app */;
 			productType = "com.apple.product-type.application";
 		};
+		CC0000000000000000000001 /* KlippyTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CC0000000000000000000010 /* Build configuration list for PBXNativeTarget "KlippyTests" */;
+			buildPhases = (
+				CC0000000000000000000006 /* Sources */,
+				CC0000000000000000000007 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				CC0000000000000000000008 /* PBXTargetDependency */,
+			);
+			name = KlippyTests;
+			productName = KlippyTests;
+			productReference = CC0000000000000000000002 /* KlippyTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
+
+/* Begin PBXContainerItemProxy section */
+		CC0000000000000000000009 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A1000034000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A1000030000000000000001;
+			remoteInfo = Klippy;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXTargetDependency section */
+		CC0000000000000000000008 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A1000030000000000000001 /* Klippy */;
+			targetProxy = CC0000000000000000000009 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin PBXProject section */
 		A1000034000000000000001 /* Project object */ = {
@@ -181,6 +277,7 @@
 			projectRoot = "";
 			targets = (
 				A1000030000000000000001 /* Klippy */,
+				CC0000000000000000000001 /* KlippyTests */,
 			);
 		};
 /* End PBXProject section */
@@ -193,6 +290,7 @@
 				A1000017000000000000001 /* DataModel.xcdatamodeld in Resources */,
 				A1000007000000000000001 /* Preview Assets.xcassets in Resources */,
 				A1000005000000000000001 /* Assets.xcassets in Resources */,
+		BB0000000000000000000D01 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -203,17 +301,38 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A1000003000000000000001 /* ContentView.swift in Sources */,
 				A1000009000000000000001 /* ClipboardManager.swift in Sources */,
 				A1000011000000000000001 /* ClipboardItem.swift in Sources */,
 				A1000013000000000000001 /* ContentClassifier.swift in Sources */,
+				BB00000000000000000000F1 /* ShortcutStore.swift in Sources */,
+				BB0000000000000000000F01 /* AppLock.swift in Sources */,
+				BB0000000000000000000E01 /* DragExport.swift in Sources */,
+				BB0000000000000000000C01 /* Log.swift in Sources */,
+				BB0000000000000000000B03 /* LaunchAtLoginHelper.swift in Sources */,
+				BB0000000000000000000B01 /* ItemDateFilter.swift in Sources */,
+				BB0000000000000000000A01 /* SiteIcon.swift in Sources */,
+				BB00000000000000000000E1 /* LinkPreviewStore.swift in Sources */,
+				BB00000000000000000000B1 /* ClipboardPrivacy.swift in Sources */,
+				BB00000000000000000000B3 /* ClipCardView.swift in Sources */,
+				BB00000000000000000000B5 /* KlippyPanel.swift in Sources */,
+				BB00000000000000000000B7 /* PanelSettingsView.swift in Sources */,
+				BB00000000000000000000A1 /* Skin.swift in Sources */,
+				BB00000000000000000000A3 /* AppIconProvider.swift in Sources */,
 				A1000015000000000000001 /* SearchEngine.swift in Sources */,
-				A1000043000000000000001 /* VirtualScrollView.swift in Sources */,
+				BB00000000000000000000D1 /* PanelController.swift in Sources */,
+				BB00000000000000000000C1 /* DateRangePopover.swift in Sources */,
 				A1000001000000000000001 /* KlippyApp.swift in Sources */,
 				A1000050000000000000001 /* SavedSnippet.swift in Sources */,
 				A1000052000000000000001 /* SnippetManager.swift in Sources */,
-				A1000054000000000000001 /* SnippetEditorView.swift in Sources */,
 				A1000056000000000000001 /* FeedbackManager.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CC0000000000000000000006 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CC0000000000000000000005 /* KlippyTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -348,13 +467,13 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"Klippy/Preview Content\"";
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = DN478SNPML;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Klippy/Info.plist;
 				INFOPLIST_KEY_LSUIElement = YES;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Klippy is released under the MIT licence.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -377,13 +496,13 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"Klippy/Preview Content\"";
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = DN478SNPML;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Klippy/Info.plist;
 				INFOPLIST_KEY_LSUIElement = YES;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Klippy is released under the MIT licence.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -393,6 +512,36 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		CC0000000000000000000011 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = DN478SNPML;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.klippy.KlippyTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Klippy.app/Contents/MacOS/Klippy";
+			};
+			name = Debug;
+		};
+		CC0000000000000000000012 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = DN478SNPML;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.klippy.KlippyTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Klippy.app/Contents/MacOS/Klippy";
 			};
 			name = Release;
 		};
@@ -413,6 +562,15 @@
 			buildConfigurations = (
 				A1000036000000000000001 /* Debug */,
 				A1000037000000000000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		CC0000000000000000000010 /* Build configuration list for PBXNativeTarget "KlippyTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CC0000000000000000000011 /* Debug */,
+				CC0000000000000000000012 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -17,6 +17,9 @@ Package.resolved
 # Build artifacts
 build/
 .dmg-build/
+.dev-build/
+.dev-build-rel/
+*.xcresult
 
 # Distribution
 dist/
@@ -29,6 +32,8 @@ klippy-launch/.remotion/
 
 # Temp / personal
 jjj/
+.agents/
+screenshots/
 memoji/
 .playwright-mcp/
 *.mp3
@@ -56,3 +61,24 @@ klippy1.png
 
 # Local release signing config (real values; template committed as .release.env.example)
 .release.env
+
+# Local classifier audit snapshot
+audit.sqlite*
+klippy-audit.txt
+
+# Design tooling
+design/**/__pycache__/
+design/mark/showcase.html
+
+# Private runbook, account details, never publish
+automation.md
+klippy-private/
+
+# Internal working files. NOT part of the shipped app, never publish.
+design/
+scratchpad/
+*.p12
+*.cer
+*.certSigningRequest
+*.provisionprofile
+*.mobileprovision

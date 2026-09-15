@@ -213,7 +213,7 @@ class SearchEngine: ObservableObject {
 
         // Category filter
         if query.category != .all {
-            predicates.append(NSPredicate(format: "contentType == %d", query.category.rawValue))
+            predicates.append(Self.categoryPredicate(query.category))
         }
 
         // Date range filter
@@ -411,7 +411,7 @@ class SearchEngine: ObservableObject {
         var predicates: [NSPredicate] = [fuzzyTextPredicate]
 
         if query.category != .all {
-            predicates.append(NSPredicate(format: "contentType == %d", query.category.rawValue))
+            predicates.append(Self.categoryPredicate(query.category))
         }
 
         if let dateRange = query.dateRange {
@@ -517,6 +517,14 @@ class SearchEngine: ObservableObject {
     }
 
     // MARK: - Cache Management
+
+    /// Matches every category the tab covers. The URLs tab has to include the
+    /// social link categories, otherwise a TikTok or Reddit link is filed under
+    /// a category with no tab and cannot be found at all.
+    private static func categoryPredicate(_ category: ContentCategory) -> NSPredicate {
+        let matching = ContentCategory.allCases.filter { $0.matches(category) }.map(\.rawValue)
+        return NSPredicate(format: "contentType IN %@", matching)
+    }
 
     private func generateCacheKey(for query: SearchQuery) -> String {
         let dateKey: String
