@@ -576,3 +576,254 @@ final class KlippyTests: XCTestCase {
         XCTAssertEqual(category, .text, "Very long content should be classified as text")
     }
 }
+
+// MARK: - Image capture
+
+/// Klippy dropped copied pictures in three separate ways and none of them said
+/// anything on screen, so these put a real picture on a real NSPasteboard and
+/// check the reader gets it back.
+final class ImageCaptureTests: XCTestCase {
+
+    private var board: NSPasteboard!
+    private var manager: ClipboardManager!
+
+    override func setUp() {
+        super.setUp()
+        board = NSPasteboard(name: NSPasteboard.Name("klippy.tests.\(UUID().uuidString)"))
+        manager = ClipboardManager.shared
+        manager.pasteboard = board
+    }
+
+    override func tearDown() {
+        board.releaseGlobally()
+        manager.pasteboard = NSPasteboard.general
+        super.tearDown()
+    }
+
+    private func swatch(_ colour: NSColor, size: NSSize = NSSize(width: 40, height: 30)) -> NSImage {
+        let image = NSImage(size: size)
+        image.lockFocus()
+        colour.setFill()
+        NSRect(origin: .zero, size: size).fill()
+        image.unlockFocus()
+        return image
+    }
+
+    private func pngData(_ image: NSImage) -> Data {
+        let tiff = image.tiffRepresentation!
+        return NSBitmapImageRep(data: tiff)!.representation(using: .png, properties: [:])!
+    }
+
+    func testFindsAnImageWrittenAsAnObject() {
+        board.clearContents()
+        board.writeObjects([swatch(.systemRed)])
+        XCTAssertNotNil(manager.getImageFromPasteboard(),
+                        "an NSImage on the pasteboard must come back as image data")
+    }
+
+    func testFindsPNGBytes() {
+        board.clearContents()
+        board.setData(pngData(swatch(.systemBlue)), forType: .png)
+        let found = manager.getImageFromPasteboard()
+        XCTAssertNotNil(found, "raw PNG bytes must be captured")
+        XCTAssertNotNil(NSImage(data: found ?? Data()), "and must decode back to a picture")
+    }
+
+    func testFindsTIFFBytes() {
+        board.clearContents()
+        board.setData(swatch(.systemGreen).tiffRepresentation!, forType: .tiff)
+        XCTAssertNotNil(manager.getImageFromPasteboard(), "TIFF bytes must be captured")
+    }
+
+    /// The regression that made images vanish: a picture arriving alongside its
+    /// filename used to fall through to being stored as that text.
+    func testImageWinsOverAccompanyingText() {
+        board.clearContents()
+        board.setData(pngData(swatch(.systemOrange)), forType: .png)
+        board.setString("Screenshot 2026-09-15 at 10.00.00.png", forType: .string)
+        XCTAssertNotNil(manager.getImageFromPasteboard(),
+                        "text sitting next to an image must not hide the image")
+    }
+
+    func testUndecodablePNGBytesAreStillKept() {
+        board.clearContents()
+        // A real PNG magic number, then rubbish. Nothing can decode it, and the
+        // old reader returned nil for the whole pasteboard because of it.
+        var bytes = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+        bytes.append(Data(repeating: 0x42, count: 512))
+        board.setData(bytes, forType: .png)
+        XCTAssertEqual(manager.getImageFromPasteboard(), bytes,
+                       "bytes that really are a PNG must be kept even if they will not decode")
+    }
+
+    func testEmptyPasteboardYieldsNothing() {
+        board.clearContents()
+        board.setString("just some text", forType: .string)
+        XCTAssertNil(manager.getImageFromPasteboard(),
+                     "plain text must not be mistaken for a picture")
+    }
+}
+
+/// The pasteboard placeholder problem: bytes that are not a picture must never
+/// be filed as one.
+final class ImageValidationTests: XCTestCase {
+
+    func testRealPNGIsAccepted() {
+        let image = NSImage(size: NSSize(width: 20, height: 12))
+        image.lockFocus(); NSColor.systemPink.setFill()
+        NSRect(x: 0, y: 0, width: 20, height: 12).fill(); image.unlockFocus()
+        let png = NSBitmapImageRep(data: image.tiffRepresentation!)!
+            .representation(using: .png, properties: [:])!
+        let size = ClipboardManager.isRealImage(png)
+        XCTAssertNotNil(size, "a real PNG must be accepted")
+        XCTAssertEqual(size?.width, 20)
+        XCTAssertEqual(size?.height, 12)
+    }
+
+    /// The exact bytes found in the real database, stored as a 341x1024 image.
+    func testPasteboardPlaceholderIsRejected() {
+        var bytes = Data([0x02])
+        bytes.append("61F61361-FF76-45EB-993C-C1613AE223D1".data(using: .utf8)!)
+        bytes.append(0x00)
+        XCTAssertEqual(bytes.count, 38, "same shape as the clip in the real database")
+        XCTAssertNil(ClipboardManager.isRealImage(bytes),
+                     "a pasteboard placeholder must never be filed as an image")
+    }
+
+    func testTruncatedPNGIsRejected() {
+        // A PNG magic number and nothing behind it.
+        let bytes = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+        XCTAssertNil(ClipboardManager.isRealImage(bytes),
+                     "a header with no picture behind it is not a picture")
+    }
+
+    func testEmptyDataIsRejected() {
+        XCTAssertNil(ClipboardManager.isRealImage(Data()))
+    }
+}
+
+/// Twelve clips in the real database are filed as colours. Some are, most are
+/// not: "Admin#12345", "Customer#123" and three multi-paragraph prompts.
+final class ColourClassificationTests: XCTestCase {
+    private let classifier = ContentClassifier()
+
+    func testRealColoursAreColours() {
+        for value in ["#1A6FED", "#5c0818", "#F5F7FA", "#fff", "rgb(12, 34, 56)"] {
+            XCTAssertEqual(classifier.classify(value), .color, "\(value) is a colour")
+        }
+    }
+
+    func testAWordWithAHashIsNotAColour() {
+        XCTAssertNotEqual(classifier.classify("Admin#12345"), .color)
+        XCTAssertNotEqual(classifier.classify("Customer#123"), .color)
+        XCTAssertNotEqual(classifier.classify("issue #abc123"), .color)
+    }
+
+    func testProseIsNotAColour() {
+        let prompt = """
+        Create a premium background image for ENA's landing page. Use #1A6FED as \
+        the accent and keep the composition airy, with plenty of negative space \
+        so the headline can breathe.
+        """
+        XCTAssertNotEqual(classifier.classify(prompt), .color)
+    }
+}
+
+/// Every switch in Settings, checked by flipping it and watching the behaviour
+/// change. A setting that reads back correctly but changes nothing is the worst
+/// kind of bug: it looks like it worked.
+final class SettingsHonourTests: XCTestCase {
+
+    private var board: NSPasteboard!
+
+    override func setUp() {
+        super.setUp()
+        board = NSPasteboard(name: NSPasteboard.Name("klippy.settings.\(UUID().uuidString)"))
+    }
+
+    override func tearDown() {
+        board.releaseGlobally()
+        UserDefaults.standard.removeObject(forKey: ClipboardPrivacy.ignoreConcealedKey)
+        UserDefaults.standard.removeObject(forKey: LinkPreviewStore.enabledKey)
+        UserDefaults.standard.removeObject(forKey: "klippy.feedback.hapticsEnabled")
+        super.tearDown()
+    }
+
+    private func concealedBoard() -> NSPasteboard {
+        board.clearContents()
+        board.setString("hunter2", forType: .string)
+        board.setString("", forType: NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"))
+        return board
+    }
+
+    func testIgnorePasswordManagersOnSkipsTheClip() {
+        UserDefaults.standard.set(true, forKey: ClipboardPrivacy.ignoreConcealedKey)
+        XCTAssertTrue(ClipboardPrivacy.shouldSkip(concealedBoard()),
+                      "switch ON must skip a password manager's copy")
+    }
+
+    func testIgnorePasswordManagersOffCapturesTheClip() {
+        UserDefaults.standard.set(false, forKey: ClipboardPrivacy.ignoreConcealedKey)
+        XCTAssertFalse(ClipboardPrivacy.shouldSkip(concealedBoard()),
+                       "switch OFF must let it through, not quietly keep skipping")
+    }
+
+    func testPasswordManagersAreProtectedBeforeAnyoneOpensSettings() {
+        UserDefaults.standard.removeObject(forKey: ClipboardPrivacy.ignoreConcealedKey)
+        XCTAssertTrue(ClipboardPrivacy.shouldSkip(concealedBoard()),
+                      "a fresh install must protect passwords by default")
+    }
+
+    /// 1Password marks its copies inconsistently, so it is skipped whatever the
+    /// switch says. That is deliberate, and worth a test so nobody 'fixes' it.
+    func testOnePasswordIsSkippedEvenWithTheSwitchOff() {
+        UserDefaults.standard.set(false, forKey: ClipboardPrivacy.ignoreConcealedKey)
+        board.clearContents()
+        board.setString("secret", forType: .string)
+        board.setString("", forType: NSPasteboard.PasteboardType("com.agilebits.onepassword"))
+        XCTAssertTrue(ClipboardPrivacy.shouldSkip(board))
+    }
+
+    func testLinkPreviewsSwitchIsHonoured() {
+        UserDefaults.standard.set(false, forKey: LinkPreviewStore.enabledKey)
+        XCTAssertFalse(LinkPreviewStore.isEnabled, "switch OFF must stop the only network call in the app")
+        UserDefaults.standard.set(true, forKey: LinkPreviewStore.enabledKey)
+        XCTAssertTrue(LinkPreviewStore.isEnabled)
+        UserDefaults.standard.removeObject(forKey: LinkPreviewStore.enabledKey)
+        XCTAssertTrue(LinkPreviewStore.isEnabled, "on by default")
+    }
+
+    func testHapticsSwitchIsHonoured() {
+        FeedbackManager.hapticsEnabled = false
+        XCTAssertFalse(FeedbackManager.hapticsEnabled)
+        FeedbackManager.hapticsEnabled = true
+        XCTAssertTrue(FeedbackManager.hapticsEnabled)
+        UserDefaults.standard.removeObject(forKey: "klippy.feedback.hapticsEnabled")
+        XCTAssertTrue(FeedbackManager.hapticsEnabled, "on by default")
+    }
+
+    func testPanelWidthMatchesTheChoice() {
+        let store = SkinStore.shared
+        let original = store.isWide
+        store.isWide = false
+        XCTAssertEqual(store.panelWidth, 430, "Compact must be 430, the number on the button")
+        store.isWide = true
+        XCTAssertEqual(store.panelWidth, 640, "Wide must be 640")
+        store.isWide = original
+    }
+
+    func testEverySkinInSettingsCanBeSelectedAndReadBack() {
+        let store = SkinStore.shared
+        let original = store.skin
+        for skin in Skin.all {
+            store.select(skin)
+            XCTAssertEqual(store.skin.id, skin.id, "\(skin.label) must stick")
+            XCTAssertEqual(Skin.named(skin.id).id, skin.id, "\(skin.label) must survive a relaunch")
+        }
+        store.select(original)
+    }
+
+    func testAnUnknownSavedSkinFallsBackInsteadOfBreaking() {
+        XCTAssertEqual(Skin.named("wheat").id, "dark", "a removed skin must fall back, not crash")
+    }
+}

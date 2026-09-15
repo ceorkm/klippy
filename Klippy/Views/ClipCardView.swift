@@ -11,6 +11,9 @@ struct ClipCardView: View {
     /// True while a secret is still hidden. The first click reveals it, the next
     /// copies it like any other clip.
     var isMasked: Bool = false
+    /// Set while the row is hovered, so the right-hand detail gets out of the
+    /// way of the delete button that appears in the same corner.
+    var hidesDetail: Bool = false
 
     @Environment(\.skin) private var skin
 
@@ -196,6 +199,7 @@ struct ClipCardView: View {
                     .font(.system(size: 11.5))
                     .monospacedDigit()
                     .foregroundStyle(skin.low)
+                    .opacity(hidesDetail ? 0 : 1)
             }
         }
         .padding(.horizontal, 11)
@@ -259,6 +263,7 @@ struct ClipCardView: View {
                 .font(.system(size: 11.5, weight: justCopied ? .semibold : .regular))
                 .monospacedDigit()
                 .foregroundStyle(detailColor)
+                .opacity(hidesDetail && !justCopied ? 0 : 1)
         }
     }
 

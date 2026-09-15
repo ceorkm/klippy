@@ -60,10 +60,10 @@ extension Skin {
 
     static let light = Skin(
         id: "light", label: "Light",
-        bg: Color(hex: 0xFFFFFF), image: nil,
-        card: Color(hex: 0xF1F1F4), chip: Color(hex: 0xECECEF), tile: Color(hex: 0xD8D8DE),
+        bg: Color(hex: 0xF4F4F7), image: nil,
+        card: Color(hex: 0xFFFFFF), chip: Color(hex: 0xFFFFFF), tile: Color(hex: 0xE6E6EC),
         hi: Color(hex: 0x111113), mid: Color(hex: 0x55555D), low: Color(hex: 0x63636B),
-        border: .black.opacity(0.12), line: .black.opacity(0.08),
+        border: .black.opacity(0.10), line: .black.opacity(0.07),
         accent: Color(hex: 0x111113), ink: .white, pop: Color(hex: 0xFFFFFF), sel: .black.opacity(0.06),
     )
 
@@ -92,14 +92,10 @@ extension Skin {
                                     bg: 0x2E3B2A, scrimTop: 0.62, scrimBottom: 0.78)
     static let hillside = photoSkin(id: "hillside", label: "Hillside", image: "skin-hillside",
                                     bg: 0x8FB0D2, scrimTop: 0.46, scrimBottom: 0.68)
-    static let hills    = photoSkin(id: "hills",    label: "Hills",    image: "skin-hills",
-                                    bg: 0xEDE3D4, scrimTop: 0.48, scrimBottom: 0.66)
-    static let wheat    = photoSkin(id: "wheat",    label: "Wheat",    image: "skin-wheat",
-                                    bg: 0xE8DCC0, scrimTop: 0.48, scrimBottom: 0.66)
-    static let aurora   = photoSkin(id: "aurora",   label: "Aurora",   image: "skin-aurora",
-                                    bg: 0x10151F, scrimTop: 0.15, scrimBottom: 0.40)
+    static let island   = photoSkin(id: "island",   label: "Island",   image: "skin-island",
+                                    bg: 0x0168B9, scrimTop: 0.38, scrimBottom: 0.58)
 
-    static let all: [Skin] = [.dark, .light, .meadow, .hillside, .hills, .wheat, .aurora]
+    static let all: [Skin] = [.dark, .light, .meadow, .hillside, .island]
 
     static func named(_ id: String) -> Skin {
         all.first { $0.id == id } ?? .dark

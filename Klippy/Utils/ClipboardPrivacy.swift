@@ -68,7 +68,24 @@ final class SecretStore: ObservableObject {
         } else {
             ids.insert(id)
         }
-        defaults.set(ids.map(\.uuidString), forKey: Self.key)
+        persist()
         return ids.contains(id)
+    }
+
+    /// Deleting a clip used to leave its secret mark behind, so the stored set
+    /// grew with ids of clips that no longer exist and never shrank.
+    func forget(_ id: UUID) {
+        guard ids.remove(id) != nil else { return }
+        persist()
+    }
+
+    func forgetAll() {
+        guard !ids.isEmpty else { return }
+        ids.removeAll()
+        persist()
+    }
+
+    private func persist() {
+        defaults.set(ids.map(\.uuidString), forKey: Self.key)
     }
 }

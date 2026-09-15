@@ -98,10 +98,15 @@ final class AppLock: ObservableObject {
         // login password, so a Mac without Touch ID still works and a failed
         // finger never leaves someone locked out of their own clips.
         do {
-            let ok = try await context.evaluatePolicy(
-                .deviceOwnerAuthentication,
-                localizedReason: "unlock your clipboard history"
-            )
+            // The Touch ID sheet takes key focus, and the panel hides the moment
+            // it loses that, so without the guard the whole window disappeared
+            // as the prompt came up and the lock looked like a crash.
+            let ok = try await PanelController.withModalSession {
+                try await context.evaluatePolicy(
+                    .deviceOwnerAuthentication,
+                    localizedReason: "unlock your clipboard history"
+                )
+            }
             if ok {
                 unlockedAt = Date()
                 isLocked = false

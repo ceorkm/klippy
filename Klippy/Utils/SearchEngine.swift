@@ -42,6 +42,8 @@ class SearchEngine: ObservableObject {
         let category: ContentCategory
         let dateRange: DateRange?
         let limit: Int
+        /// Name of the app a clip was copied from, when filtering by one.
+        var source: String? = nil
     }
 
     // MARK: - Search Results Cache
@@ -85,14 +87,16 @@ class SearchEngine: ObservableObject {
         query: String,
         category: ContentCategory = .all,
         dateRange: DateRange? = nil,
-        limit: Int = 100
+        limit: Int = 100,
+        source: String? = nil
     ) -> [ClipboardItemViewModel] {
 
         let searchQuery = SearchQuery(
             text: query.trimmingCharacters(in: .whitespacesAndNewlines),
             category: category,
             dateRange: dateRange,
-            limit: min(limit, SearchConfig.maxResults)
+            limit: min(limit, SearchConfig.maxResults),
+            source: source
         )
 
         // Check cache first
@@ -106,6 +110,7 @@ class SearchEngine: ObservableObject {
         // (API keys, payment cards, etc.) beyond the cache window are discoverable.
         if (searchQuery.text.isEmpty || searchQuery.text.count < SearchConfig.minQueryLength) &&
             searchQuery.dateRange == nil &&
+            searchQuery.source == nil &&
             searchQuery.category == .all {
             return ClipboardManager.shared.getItemsFromCache(
                 matching: searchQuery.text,
@@ -216,6 +221,11 @@ class SearchEngine: ObservableObject {
             predicates.append(Self.categoryPredicate(query.category))
         }
 
+        // Which app it came from
+        if let source = query.source {
+            predicates.append(NSPredicate(format: "sourceApplication == %@", source))
+        }
+
         // Date range filter
         if let dateRange = query.dateRange {
             predicates.append(
@@ -261,9 +271,14 @@ class SearchEngine: ObservableObject {
         if queryTokens.isEmpty {
             verified = primaryResults
         } else {
+            // `lowercased()` allocated a whole second copy of every match's
+            // content, and a clip can be a page of text. Case-insensitive
+            // `range(of:)` compares in place instead. Measured at roughly 270ms
+            // of a 718ms search over a 20,800 clip history.
             verified = primaryResults.filter { item in
-                let lowered = item.content.lowercased()
-                return queryTokens.allSatisfy { lowered.contains($0) }
+                queryTokens.allSatisfy {
+                    item.content.range(of: $0, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+                }
             }
         }
 
@@ -330,19 +345,28 @@ class SearchEngine: ObservableObject {
         let normalizedQuery = normalizeForFuzzy(query)
         let queryTokens = normalizedSearchTokens(from: query)
 
-        let ranked = items.sorted { lhs, rhs in
-            let leftScore = score(item: lhs, query: normalizedQuery, tokens: queryTokens)
-            let rightScore = score(item: rhs, query: normalizedQuery, tokens: queryTokens)
-
-            if leftScore != rightScore {
-                return leftScore > rightScore
-            }
-
-            return lhs.createdAt > rhs.createdAt
+        // Score every item ONCE, then sort the scores.
+        //
+        // This used to call `score` from inside the comparator, so each item was
+        // re-scored on every comparison it took part in: about 2 n log n calls
+        // instead of n. At 5000 matches that is 120,000 scorings for 5000 items,
+        // and scoring is not cheap (it normalises a 300-character prefix,
+        // tokenises it and can run an edit distance). Measured on a real 20,800
+        // clip history, ranking one keystroke took 2361ms of a 2896ms search.
+        let scored = items.map {
+            (score: score(item: $0, query: normalizedQuery, tokens: queryTokens), item: $0)
+        }
+        let ranked = scored.sorted { lhs, rhs in
+            if lhs.score != rhs.score { return lhs.score > rhs.score }
+            return lhs.item.createdAt > rhs.item.createdAt
         }
 
-        return Array(ranked.prefix(limit))
+        return ranked.prefix(limit).map(\.item)
     }
+
+    /// Resolved once. `Calendar.current` rebuilds a calendar every time it is
+    /// read, and this is the hottest function in the app.
+    private static let scoringCalendar = Calendar.current
 
     private func score(item: ClipboardItemViewModel, query: String, tokens: [String]) -> Int {
         // Only score against a prefix of the content to avoid expensive ops on huge strings
@@ -352,8 +376,7 @@ class SearchEngine: ObservableObject {
         // Day bucket: each calendar day is worth 100,000 points.
         // This guarantees ALL of today's matches rank above yesterday's,
         // which rank above last week's, etc. — matching user intent.
-        let calendar = Calendar.current
-        let dayStart = calendar.startOfDay(for: item.createdAt)
+        let dayStart = Self.scoringCalendar.startOfDay(for: item.createdAt)
         let daysSinceEpoch = Int(dayStart.timeIntervalSince1970 / 86400)
         var score = daysSinceEpoch * 100_000
 
@@ -534,7 +557,7 @@ class SearchEngine: ObservableObject {
             dateKey = "all-time"
         }
 
-        return "\(query.text)|\(query.category.rawValue)|\(dateKey)|\(query.limit)|\(ClipboardManager.shared.totalItemCount)"
+        return "\(query.text)|\(query.category.rawValue)|\(dateKey)|\(query.source ?? "-")|\(query.limit)|\(ClipboardManager.shared.historyRevision)"
     }
 
     private func cleanExpiredCache() {

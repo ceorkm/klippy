@@ -17,8 +17,19 @@ final class PanelController: NSObject, NSWindowDelegate {
     private var hotKeyRef: EventHotKeyRef?
     private var slotHotKeyRefs: [EventHotKeyRef?] = []
     private var sequentialHotKeyRef: EventHotKeyRef?
-    private var sequentialIndex = -1
+    private var sequentialIndex = 0
     private var sequentialResetWork: DispatchWorkItem?
+
+    /// Non-zero while Klippy itself is showing something that takes key focus:
+    /// an open/save panel, an alert, the Touch ID prompt. Without this
+    /// `windowDidResignKey` hides the panel the instant any of them appear, so
+    /// the app vanishes mid-action and the result never gets seen.
+    private var modalDepth = 0
+
+    /// When the panel last went away. Clicking the status item resigns key,
+    /// which runs `hide()` before the button's action fires, so without this the
+    /// icon could never close the panel: it would hide, then immediately reopen.
+    private var lastHiddenAt: Date?
 
     private override init() { super.init() }
 
@@ -31,7 +42,8 @@ final class PanelController: NSObject, NSWindowDelegate {
         item.button?.image?.accessibilityDescription = "Klippy"
         item.button?.image?.isTemplate = true
         item.button?.target = self
-        item.button?.action = #selector(toggle)
+        item.button?.action = #selector(statusItemClicked)
+        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         statusItem = item
 
         registerHotKey()
@@ -39,12 +51,86 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     // MARK: - Showing
 
+    /// Right-click (or control-click) opens the menu, anything else toggles.
+    @objc private func statusItemClicked() {
+        let event = NSApp.currentEvent
+        if event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true {
+            showStatusMenu()
+        } else {
+            toggle()
+        }
+    }
+
     @objc func toggle() {
         if panel?.isVisible == true {
             hide()
-        } else {
-            show()
+            return
         }
+        // Resigning key already hid it a moment ago, as part of this same click.
+        if let lastHiddenAt, Date().timeIntervalSince(lastHiddenAt) < 0.25 { return }
+        show()
+    }
+
+    /// Klippy is an `LSUIElement` app: no Dock icon and no menu bar of its own.
+    /// The rebuild dropped the old window's Quit button with the window, which
+    /// left no way to quit at all short of Activity Monitor.
+    private func showStatusMenu() {
+        let menu = NSMenu()
+
+        let open = menu.addItem(withTitle: "Open Klippy",
+                                action: #selector(openFromMenu), keyEquivalent: "")
+        open.target = self
+
+        let settings = menu.addItem(withTitle: "Settings…",
+                                    action: #selector(openSettingsFromMenu), keyEquivalent: ",")
+        settings.target = self
+
+        menu.addItem(.separator())
+
+        let quit = menu.addItem(withTitle: "Quit Klippy",
+                                action: #selector(quitFromMenu), keyEquivalent: "q")
+        quit.target = self
+
+        // Attaching the menu makes the next click open it; detaching again
+        // afterwards keeps the plain left click a toggle rather than a menu.
+        statusItem?.menu = menu
+        statusItem?.button?.performClick(nil)
+        statusItem?.menu = nil
+    }
+
+    @objc private func openFromMenu() { show() }
+
+    @objc private func openSettingsFromMenu() {
+        show()
+        NotificationCenter.default.post(name: Self.openSettingsNotification, object: nil)
+    }
+
+    @objc private func quitFromMenu() { NSApp.terminate(nil) }
+
+    /// Asks the panel to open straight on Settings.
+    static let openSettingsNotification = Notification.Name("klippy.panel.openSettings")
+
+    // MARK: - Modal sessions
+
+    /// Runs `work` with the auto-hide guard raised, then puts focus back on the
+    /// panel so it is still there when the dialog closes.
+    static func withModalSession<T>(_ work: () -> T) -> T {
+        shared.modalDepth += 1
+        defer { shared.endModalSession() }
+        return work()
+    }
+
+    static func withModalSession<T>(_ work: () async throws -> T) async rethrows -> T {
+        shared.modalDepth += 1
+        defer { shared.endModalSession() }
+        return try await work()
+    }
+
+    private func endModalSession() {
+        modalDepth = max(0, modalDepth - 1)
+        guard modalDepth == 0, let panel, panel.isVisible else { return }
+        panel.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     /// Posted just before the panel appears so the UI can return to its default
@@ -67,8 +153,18 @@ final class PanelController: NSObject, NSWindowDelegate {
     }
 
     func hide() {
+        lastHiddenAt = Date()
         panel?.orderOut(nil)
         NotificationCenter.default.post(name: Self.didHideNotification, object: nil)
+    }
+
+    /// Re-sizes an open panel, for the Compact / Wide switch. The size was only
+    /// ever set in `show()`, so changing it while the panel was up laid the
+    /// content out at the new width inside a window still at the old one.
+    func resizeToFit() {
+        guard let panel, panel.isVisible else { return }
+        panel.setContentSize(NSSize(width: SkinStore.shared.panelWidth, height: 650))
+        panel.setFrameTopLeftPoint(anchorPoint(for: panel))
     }
 
     private func makePanel() -> KlippyFloatingPanel {
@@ -119,6 +215,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     }
 
     func windowDidResignKey(_ notification: Notification) {
+        guard modalDepth == 0 else { return }
         hide()
     }
 
@@ -183,11 +280,14 @@ final class PanelController: NSObject, NSWindowDelegate {
         let items = ClipboardManager.shared.recentItems
         guard !items.isEmpty else { return }
 
+        // Starts at 1, not 0. Slot 0 is the newest clip, which is the one
+        // already on the clipboard, so the first press used to re-copy what you
+        // had and look like it had done nothing.
         sequentialIndex = min(sequentialIndex + 1, items.count - 1)
         recallSlot(sequentialIndex)
 
         sequentialResetWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.sequentialIndex = -1 }
+        let work = DispatchWorkItem { [weak self] in self?.sequentialIndex = 0 }
         sequentialResetWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
     }

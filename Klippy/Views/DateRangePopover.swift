@@ -102,6 +102,10 @@ struct DateRangePopover: View {
                 RoundedRectangle(cornerRadius: 11, style: .continuous)
                     .fill(option == filter ? skin.sel : .clear)
             )
+            // SwiftUI does not hit-test a clear fill, so without this the only
+            // clickable part of an unselected row is the text itself and a click
+            // two pixels off the letters does nothing at all.
+            .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
         }
         .buttonStyle(.plain)
     }
@@ -133,6 +137,7 @@ struct DateRangePopover: View {
                 RoundedRectangle(cornerRadius: 11, style: .continuous)
                     .fill(filter == .custom ? skin.sel : .clear)
             )
+            .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
         }
         .buttonStyle(.plain)
     }
@@ -209,6 +214,7 @@ struct DateRangePopover: View {
                     .frame(maxWidth: .infinity)
                     .frame(height: 30)
                     .background(dayBackground(position))
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
         } else {

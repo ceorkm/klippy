@@ -82,3 +82,9 @@ scratchpad/
 *.certSigningRequest
 *.provisionprofile
 *.mobileprovision
+
+# Loose images dropped into the app folder. Real assets live in
+# Assets.xcassets, so anything else here is a stray from another project.
+Klippy/*.png
+Klippy/*.jpg
+Klippy/*.jpeg

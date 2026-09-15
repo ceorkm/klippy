@@ -26,6 +26,12 @@ struct KlippyPanel: View {
     @ObservedObject private var secretStore = SecretStore.shared
 
     @State private var searchText = ""
+    /// What the list actually searches for. The field updates on every
+    /// keystroke; this follows a moment later, so a fast typist runs one search
+    /// instead of one per letter. Searching is not free on a large history and
+    /// it runs on the main thread, so every keystroke was a stall.
+    @State private var appliedSearch = ""
+    @State private var searchDebounce: DispatchWorkItem?
     @State private var category: ContentCategory = .all
     @State private var dateFilter: ItemDateFilter = .allTime
     @State private var panelView: PanelView = .history
@@ -38,10 +44,17 @@ struct KlippyPanel: View {
     @State private var previewItem: ClipboardItemViewModel?
     /// A merged clip opened to show the individual clips inside it.
     @State private var expandedMerge: ClipboardItemViewModel?
+    /// Built once when the merge is opened. Building them inside the view meant
+    /// a fresh UUID per part on every render, so the copied flash never matched
+    /// and the whole list was torn down each time any state changed.
+    @State private var expandedParts: [ClipboardItemViewModel] = []
     @State private var isDropTargeted = false
     @State private var showingSettings = false
     @StateObject private var appLock = AppLock.shared
     @State private var showingDatePicker = false
+    /// Name of the app whose clips are being shown, nil for all of them.
+    @State private var sourceFilter: String?
+    @State private var showingSourcePicker = false
     @State private var customStart = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
     @State private var customEnd = Date()
 
@@ -96,16 +109,47 @@ struct KlippyPanel: View {
         .environment(\.colorScheme, skin.isDark ? .dark : .light)
         .onReceive(NotificationCenter.default.publisher(
             for: PanelController.willShowNotification)) { _ in
+            // Klippy reopens exactly as you left it: same tab, same search,
+            // same filter, same selection, and still inside an opened merge.
+            // Copying one line out of a merged clip means leaving to paste it,
+            // and being thrown back to the top of History on the way back made
+            // getting the second line out of the same clip a chore.
+            //
+            // Two things are deliberately not kept:
+            //
+            // Revealed secrets. Uncovering an API key is a decision about one
+            // moment, not a standing one, so it covers itself again.
+            //
+            // Anything drawn on top: the settings screen, the date menu and the
+            // image preview are all momentary, and coming back into one of them
+            // hides the history behind it for no reason.
             showingSettings = false
             showingDatePicker = false
-            selection = []
-            revealedIDs = []
+            showingSourcePicker = false
             previewItem = nil
+            revealedIDs = []
+
             appLock.refreshLockState()
             if appLock.isLocked {
                 Task { await appLock.unlock() }
             }
-            expandedMerge = nil
+
+            // The field was wired for focus and never given it, so every open
+            // needed a mouse click before you could type. The hop waits for the
+            // window to finish becoming key. Skipped inside an opened merge,
+            // which has no search field of its own.
+            if !appLock.isLocked, expandedMerge == nil {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { searchFocused = true }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(
+            for: PanelController.openSettingsNotification)) { _ in
+            showingSettings = true
+        }
+        // Compact / Wide only took effect on the next open, because the window
+        // is sized in `show()` and nothing watched the setting after that.
+        .onChange(of: skinStore.isWide) { _ in
+            PanelController.shared.resizeToFit()
         }
         .background(TransparentHostWindow())
     }
@@ -177,14 +221,9 @@ struct KlippyPanel: View {
 
     private var header: some View {
         HStack(spacing: 11) {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(skin.chip)
-                .frame(width: 36, height: 36)
-                .overlay(
-                    Image(systemName: "paperclip")
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(skin.hi)
-                )
+            Image("AppMark")
+                .renderingMode(.template)
+                .foregroundStyle(skin.hi)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text("Klippy")
@@ -197,11 +236,15 @@ struct KlippyPanel: View {
 
             Spacer(minLength: 4)
 
-            iconButton("pin", isOn: panelView == .pinned) { toggle(.pinned) }
-            iconButton("bookmark", isOn: panelView == .saved) { toggle(.saved) }
+            iconButton("pin", isOn: panelView == .pinned,
+                       help: "Pinned clips") { toggle(.pinned) }
+            iconButton("bookmark", isOn: panelView == .saved,
+                       help: "Saved clips") { toggle(.saved) }
             iconButton("point.topleft.down.curvedto.point.bottomright.up",
-                       isOn: panelView == .merged) { toggle(.merged) }
-            iconButton("slider.horizontal.3", isOn: showingSettings) {
+                       isOn: panelView == .merged,
+                       help: "Merged clips") { toggle(.merged) }
+            iconButton("slider.horizontal.3", isOn: showingSettings,
+                       help: "Settings") {
                 showingSettings.toggle()
                 showingDatePicker = false
             }
@@ -210,7 +253,11 @@ struct KlippyPanel: View {
         .padding(.top, 18)
     }
 
-    private func iconButton(_ symbol: String, isOn: Bool, action: @escaping () -> Void) -> some View {
+    /// `help` is not decoration. These are four unlabelled circles and there is
+    /// no way to learn what they do except by pressing each one and seeing what
+    /// happens to the list.
+    private func iconButton(_ symbol: String, isOn: Bool, help: String,
+                            action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Circle()
                 .fill(isOn ? skin.accent : skin.chip)
@@ -222,6 +269,8 @@ struct KlippyPanel: View {
                 )
         }
         .buttonStyle(.plain)
+        .help(help)
+        .accessibilityLabel(help)
     }
 
     private func toggle(_ view: PanelView) {
@@ -251,8 +300,99 @@ struct KlippyPanel: View {
             if showingDatePicker {
                 dateMenu
                     .padding(.top, 84)
+            } else if showingSourcePicker {
+                sourceMenu
+                    .padding(.top, 84)
             }
         }
+    }
+
+    /// The apps you have copied from, most-copied first. Same shape as the date
+    /// menu so it behaves the way that one already does.
+    private var sourceMenu: some View {
+        VStack(spacing: 2) {
+            sourceRow(source: nil)
+
+            if !clipboardManager.presentSources.isEmpty {
+                Rectangle()
+                    .fill(skin.line)
+                    .frame(height: 1)
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 5)
+            }
+
+            ScrollView(.vertical) {
+                VStack(spacing: 2) {
+                    ForEach(clipboardManager.presentSources) { source in
+                        sourceRow(source: source)
+                    }
+                }
+            }
+            .scrollIndicators(.never)
+            .scrollContentBackground(.hidden)
+            .frame(maxHeight: 320)
+        }
+        .padding(6)
+        .frame(width: 244)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(skin.pop)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(skin.border, lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.6), radius: 30, y: 18)
+        .padding(.trailing, 18)
+        .padding(.top, 4)
+    }
+
+    private func sourceRow(source: ClipboardManager.ClipSource?) -> some View {
+        let isOn = sourceFilter == source?.name
+        let count = source?.count ?? clipboardManager.totalItemCount
+        return Button {
+            sourceFilter = source?.name
+            selection = []
+            showingSourcePicker = false
+        } label: {
+            HStack(spacing: 9) {
+                // The app's own icon, the same one the cards already draw, in a
+                // fixed-width slot so the names still line up when an app has no
+                // icon to give.
+                Group {
+                    if let source {
+                        AppIconTile(bundleID: source.bundleID, appName: source.name, size: 17)
+                    } else {
+                        Image(systemName: "square.grid.2x2")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(skin.mid)
+                    }
+                }
+                .frame(width: 18, height: 18)
+
+                Text(source?.name ?? "Any app")
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text(Self.grouped(count))
+                    .font(.system(size: 12))
+                    .monospacedDigit()
+                    .foregroundStyle(skin.low)
+                Image(systemName: "checkmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .opacity(isOn ? 1 : 0)
+            }
+            .font(.system(size: 13.5))
+            .foregroundStyle(skin.hi)
+            .padding(.horizontal, 11)
+            .frame(height: 32)
+            .background(
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(isOn ? skin.sel : .clear)
+            )
+            // A clear fill is not hit-testable, so without this only the text
+            // would take a click. Same trap that killed the date presets.
+            .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+        }
+        .buttonStyle(.plain)
     }
 
     private var searchBar: some View {
@@ -266,6 +406,15 @@ struct KlippyPanel: View {
                 .font(.system(size: 14.5))
                 .foregroundStyle(skin.hi)
                 .focused($searchFocused)
+                .onChange(of: searchText) { text in
+                    searchDebounce?.cancel()
+                    // Clearing the box should feel instant; there is nothing to
+                    // compute, the unfiltered list comes straight from memory.
+                    guard !text.isEmpty else { appliedSearch = ""; return }
+                    let work = DispatchWorkItem { appliedSearch = text }
+                    searchDebounce = work
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+                }
         }
         .padding(.horizontal, 13)
         .frame(height: 40)
@@ -287,11 +436,34 @@ struct KlippyPanel: View {
 
             Spacer(minLength: 4)
 
+            if !clipboardManager.presentSources.isEmpty {
+                Button {
+                    showingSourcePicker.toggle()
+                    showingDatePicker = false
+                } label: {
+                    HStack(spacing: 4) {
+                        if let sourceFilter,
+                           let picked = clipboardManager.presentSources.first(where: { $0.name == sourceFilter }) {
+                            AppIconTile(bundleID: picked.bundleID, appName: picked.name, size: 14)
+                        }
+                        Text(sourceFilter ?? "App")
+                            .lineLimit(1)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 9, weight: .bold))
+                    }
+                    .font(.system(size: 13))
+                    .foregroundStyle(sourceFilter == nil && !showingSourcePicker ? skin.mid : skin.hi)
+                }
+                .buttonStyle(.plain)
+                .help("Show only clips copied from one app")
+            }
+
             Button {
                 showingDatePicker.toggle()
+                showingSourcePicker = false
             } label: {
                 HStack(spacing: 4) {
-                    Text("Date")
+                    Text(dateFilter == .allTime ? "Date" : dateFilter.displayName)
                     Image(systemName: "chevron.down")
                         .font(.system(size: 9, weight: .bold))
                 }
@@ -299,6 +471,7 @@ struct KlippyPanel: View {
                 .foregroundStyle(dateFilter == .allTime && !showingDatePicker ? skin.mid : skin.hi)
             }
             .buttonStyle(.plain)
+            .help("Filter by when a clip was copied")
         }
         .padding(.horizontal, 18)
         .padding(.top, 12)
@@ -327,7 +500,7 @@ struct KlippyPanel: View {
     private var chipRow: some View {
         ScrollView(.horizontal) {
             HStack(spacing: 7) {
-                ForEach(Self.filterCategories, id: \.self) { item in
+                ForEach(visibleCategories, id: \.self) { item in
                     let isOn = item == category
                     Button {
                         category = item
@@ -356,6 +529,21 @@ struct KlippyPanel: View {
     /// No tab for `.instagramURL` or `.tiktokURL`: they are social links, and
     /// the Social tab already covers them. Before that they had no tab at all,
     /// so a TikTok link could only be found under All.
+    /// Only the chips that lead somewhere.
+    ///
+    /// All is always there. A chip appears once the history actually holds
+    /// something it covers, and the one you are currently on stays put even if
+    /// its last clip is deleted, so a tab never vanishes under your finger.
+    private var visibleCategories: [ContentCategory] {
+        let present = clipboardManager.presentCategories
+        guard !present.isEmpty else { return [.all] }
+        return Self.filterCategories.filter { tab in
+            tab == .all
+                || tab == category
+                || present.contains { $0.matches(tab) }
+        }
+    }
+
     private static let filterCategories: [ContentCategory] = [
         .all, .text, .url, .socialMedia, .image, .file,
         .color, .code, .email, .apiKey, .paymentCard,
@@ -446,29 +634,50 @@ struct KlippyPanel: View {
         let masked = isSecret && !revealedIDs.contains(item.id)
         // A real Button rather than .onTapGesture: it hit-tests reliably next to
         // .onDrag, takes keyboard focus, and is what assistive tech expects.
-        return Button {
-            // First click on a secret only uncovers it. Copying takes a
-            // second, deliberate click.
-            if masked {
-                revealedIDs.insert(item.id)
-                return
-            }
-            // Opening shows what went into it. Copying is still on the
-            // right-click menu, and now yields readable text.
-            if item.isMergedClip, NSEvent.modifierFlags.isDisjoint(with: [.command, .shift]) {
-                expandedMerge = item
-                return
-            }
-            activate(item)
-        } label: {
+        return ClipRow(
+            onActivate: {
+                // First click on a secret only uncovers it. Copying takes a
+                // second, deliberate click.
+                if masked {
+                    revealedIDs.insert(item.id)
+                    return
+                }
+                // Opening shows what went into it. Copying is still on the
+                // right-click menu, and now yields readable text.
+                if item.isMergedClip, NSEvent.modifierFlags.isDisjoint(with: [.command, .shift]) {
+                    expandedParts = Self.parts(of: item)
+                    expandedMerge = item
+                    return
+                }
+                activate(item)
+            },
+            onDelete: { delete(item) }
+        ) { hovered in
             ClipCardView(item: item,
                          isSelected: selection.contains(item.id),
                          justCopied: copiedID == item.id,
-                         isMasked: masked)
+                         isMasked: masked,
+                         hidesDetail: hovered)
         }
-            .buttonStyle(.plain)
             .contextMenu { menu(for: item) }
             .onDrag { dragProvider(for: item) }
+    }
+
+    /// The old list had a trash on every row. The rebuild left deleting on the
+    /// right-click menu only, which nobody finds unless they already know.
+    private func delete(_ item: ClipboardItemViewModel) {
+        if panelView == .saved {
+            snippetManager.deleteSnippet(id: item.id)
+            searchEngine.clearCache()
+            FeedbackManager.playDelete()
+            showToast("Removed from Saved", symbol: "trash")
+        } else {
+            clipboardManager.deleteItem(itemId: item.id)
+            searchEngine.clearCache()
+            FeedbackManager.playDelete()
+            showToast("Deleted", symbol: "trash")
+        }
+        selection.remove(item.id)
     }
 
     /// A saved snippet is a different object to a clip, so it gets its own
@@ -560,7 +769,7 @@ struct KlippyPanel: View {
         alert.accessoryView = field
         alert.window.initialFirstResponder = field
 
-        if alert.runModal() == .alertFirstButtonReturn {
+        if PanelController.withModalSession({ alert.runModal() }) == .alertFirstButtonReturn {
             let newTitle = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !newTitle.isEmpty else { return }
             snippetManager.updateSnippet(id: id, title: newTitle, content: snippet.content)
@@ -573,7 +782,7 @@ struct KlippyPanel: View {
             Text(emptyTitle)
                 .font(.system(size: 15))
                 .foregroundStyle(skin.mid)
-            Text("Try another view or widen the date range")
+            Text(emptySubtitle)
                 .font(.system(size: 13))
                 .foregroundStyle(skin.low)
         }
@@ -586,8 +795,20 @@ struct KlippyPanel: View {
         case .pinned: return "Nothing pinned yet"
         case .saved: return "Nothing saved yet"
         case .merged: return "No merged clips yet"
-        case .history: return "No clips match"
+        case .history: return showingEverything ? "Nothing copied yet" : "No clips match"
         }
+    }
+
+    /// The old line told everyone to widen a date range, including people who
+    /// had never set one.
+    private var emptySubtitle: String {
+        if showingEverything { return "Copy something and it shows up here" }
+        if let sourceFilter { return "Nothing copied from \(sourceFilter)" }
+        if dateFilter != .allTime { return "Nothing in \(dateFilter.displayName.lowercased())" }
+        if !appliedSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "Nothing matches that search"
+        }
+        return "Try another view or clear the filters"
     }
 
     // MARK: - Footer
@@ -604,18 +825,29 @@ struct KlippyPanel: View {
             }
             .buttonStyle(.plain)
 
-            secondaryButton("Pin") {
-                let count = selection.count
-                for id in selection { _ = clipboardManager.toggleFavorite(itemId: id) }
+            secondaryButton("Pin", help: "Pin these clips to the top") {
+                let ids = selection
+                // Toggling each one in turn unpinned anything already pinned,
+                // while the toast still claimed they had all been pinned.
+                // Decide once for the whole selection, then make them match.
+                let shouldPin = !ids.allSatisfy { clipboardManager.isFavorite(itemId: $0) }
+                for id in ids where clipboardManager.isFavorite(itemId: id) != shouldPin {
+                    _ = clipboardManager.toggleFavorite(itemId: id)
+                }
                 selection = []
                 FeedbackManager.playPin()
-                showToast(count == 1 ? "Pinned" : "Pinned \(count) clips", symbol: "pin.fill")
+                let verb = shouldPin ? "Pinned" : "Unpinned"
+                showToast(ids.count == 1 ? verb : "\(verb) \(ids.count) clips",
+                          symbol: shouldPin ? "pin.fill" : "pin.slash")
             }
             if selectedImageCount > 0 {
-                secondaryButton("Export \(selectedImageCount)") { exportSelectedImages() }
+                secondaryButton("Export \(selectedImageCount)",
+                                help: "Write the selected images to a folder") {
+                    exportSelectedImages()
+                }
             }
-            secondaryButton("Save") { saveSelection() }
-            secondaryButton("Clear", quiet: true) { selection = [] }
+            secondaryButton("Save", help: "Keep these in Saved") { saveSelection() }
+            secondaryButton("Clear", quiet: true, help: "Clear the selection") { selection = [] }
         }
         .padding(.horizontal, 18)
         .padding(.top, 13)
@@ -624,6 +856,7 @@ struct KlippyPanel: View {
     }
 
     private func secondaryButton(_ title: String, quiet: Bool = false,
+                                 help: String? = nil,
                                  action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
@@ -634,6 +867,7 @@ struct KlippyPanel: View {
                 .background(skin.chip, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)
+        .help(help ?? title)
     }
 
     // MARK: - Drag out
@@ -755,9 +989,9 @@ struct KlippyPanel: View {
     /// The clips that went into a merged clip, each copyable on its own. The old
     /// UI had this and the rebuild dropped it, which made a merge look like it
     /// had swallowed everything.
-    private func mergedContents(_ item: ClipboardItemViewModel) -> some View {
+    private static func parts(of item: ClipboardItemViewModel) -> [ClipboardItemViewModel] {
         let classifier = ContentClassifier()
-        let parts = item.mergedComponents.map { content in
+        return item.mergedComponents.map { content in
             ClipboardItemViewModel(
                 id: UUID(),
                 content: content,
@@ -766,11 +1000,16 @@ struct KlippyPanel: View {
                 lastAccessedAt: item.lastAccessedAt
             )
         }
+    }
+
+    private func mergedContents(_ item: ClipboardItemViewModel) -> some View {
+        let parts = expandedParts
 
         return VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Button {
                     expandedMerge = nil
+                    expandedParts = []
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "chevron.left")
@@ -944,7 +1183,8 @@ struct KlippyPanel: View {
     }
 
     private var selectedImageCount: Int {
-        items.filter { selection.contains($0.id) && $0.nsImage != nil }.count
+        // `isImage` is a stored flag; `nsImage` decodes the picture.
+        items.filter { selection.contains($0.id) && $0.isImage }.count
     }
 
     /// Writes every selected picture into a folder of your choosing.
@@ -967,7 +1207,8 @@ struct KlippyPanel: View {
             ? "Choose where to save the image"
             : "Choose where to save \(chosen.count) images"
 
-        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        let choice = PanelController.withModalSession { panel.runModal() }
+        guard choice == .OK, let folder = panel.url else { return }
 
         var written = 0
         for item in chosen {
@@ -1040,7 +1281,17 @@ struct KlippyPanel: View {
     // MARK: - Data
 
     private var countLabel: String {
-        Self.grouped(panelView == .history ? clipboardManager.totalItemCount : items.count)
+        Self.grouped(showingEverything ? clipboardManager.totalItemCount : items.count)
+    }
+
+    /// True when History is unfiltered, which is the one case where the list is
+    /// served from the capped memory cache and its count would understate things.
+    private var showingEverything: Bool {
+        panelView == .history
+            && dateFilter == .allTime
+            && sourceFilter == nil
+            && category == .all
+            && appliedSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private static func grouped(_ value: Int) -> String {
@@ -1052,10 +1303,11 @@ struct KlippyPanel: View {
     private var items: [ClipboardItemViewModel] {
         let range = dateFilter.makeRange(customStartDate: customStart, customEndDate: customEnd)
         let results = searchEngine.search(
-            query: searchText,
+            query: appliedSearch,
             category: category,
             dateRange: range,
-            limit: 5000
+            limit: 5000,
+            source: sourceFilter
         )
 
         switch panelView {
@@ -1085,6 +1337,8 @@ struct KlippyPanel: View {
     /// Applies the search box, chip and date filters to rows that didn't come
     /// out of the search engine.
     private func matchesFilters(_ item: ClipboardItemViewModel) -> Bool {
+        if let sourceFilter, item.sourceApplication != sourceFilter { return false }
+
         // Same grouping as search: the Social tab covers the three social
         // link kinds, which have no tab of their own.
         if category != .all && !item.category.matches(category) { return false }
@@ -1093,7 +1347,7 @@ struct KlippyPanel: View {
             if item.createdAt < range.start || item.createdAt >= range.end { return false }
         }
 
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let query = appliedSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !query.isEmpty else { return true }
         return item.content.lowercased().contains(query)
     }
@@ -1185,6 +1439,59 @@ private struct TransparentHostWindow: NSViewRepresentable {
         view.wantsLayer = true
         view.layer?.backgroundColor = NSColor.clear.cgColor
         view.subviews.forEach(clear)
+    }
+}
+
+/// One row in the list: the card, plus a delete button that fades in on hover.
+///
+/// The delete button lives here rather than inside `ClipCardView` because the
+/// card is the label of a Button. A control nested inside another Button's label
+/// does not reliably receive clicks on macOS, which is the same mistake that
+/// left the date presets dead. As an overlay it sits outside that button and
+/// hit-tests on its own.
+private struct ClipRow<Card: View>: View {
+    let onActivate: () -> Void
+    let onDelete: () -> Void
+    /// Handed the hover state so the card can clear the corner the trash uses.
+    @ViewBuilder let card: (Bool) -> Card
+
+    @Environment(\.skin) private var skin
+    @State private var isHovered = false
+    @State private var isHoveringDelete = false
+
+    var body: some View {
+        Button(action: onActivate) { card(isHovered) }
+            .buttonStyle(.plain)
+            // Bottom corner, in the space the timestamp vacates. The first go
+            // put it top-right over the clip's own text, and in a circle, which
+            // made a heavy badge sitting on top of the words.
+            .overlay(alignment: .bottomTrailing) {
+                if isHovered {
+                    Button(action: onDelete) {
+                        Image(systemName: "trash")
+                            .font(.system(size: 11.5, weight: .medium))
+                            .foregroundStyle(isHoveringDelete ? Color(hex: 0xE5484D) : skin.mid)
+                            // No plate behind it. A soft shadow is enough to
+                            // keep it legible over a photo preview.
+                            .shadow(color: .black.opacity(0.45), radius: 3, y: 1)
+                            .frame(width: 24, height: 20, alignment: .trailing)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Delete this clip")
+                    .accessibilityLabel("Delete this clip")
+                    .onHover { isHoveringDelete = $0 }
+                    .padding(.trailing, 10)
+                    .padding(.bottom, 8)
+                    .transition(.opacity)
+                }
+            }
+            .onHover { hovering in
+                isHovered = hovering
+                if !hovering { isHoveringDelete = false }
+            }
+            .animation(.easeOut(duration: 0.13), value: isHovered)
+            .animation(.easeOut(duration: 0.11), value: isHoveringDelete)
     }
 }
 

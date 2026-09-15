@@ -8,7 +8,10 @@ import ImageIO
 class ClipboardManager: ObservableObject {
     static let shared = ClipboardManager()
     
-    private let pasteboard = NSPasteboard.general
+    /// The general pasteboard in the app. Tests point it at a private one so
+    /// they can put a real picture on a real NSPasteboard and check that the
+    /// reader finds it, without touching what the user has copied.
+    var pasteboard = NSPasteboard.general
     private var lastChangeCount: Int = 0
     private var monitoringTimer: Timer?
     private let contentClassifier = ContentClassifier()
@@ -22,6 +25,30 @@ class ClipboardManager: ObservableObject {
     
     // Published properties for UI updates
     @Published var totalItemCount: Int = 0
+
+    /// Every category the stored history actually contains. A new user has
+    /// copied text and nothing else, so showing them a row of twenty chips for
+    /// payment cards, IP addresses and colours is twenty dead ends.
+    @Published private(set) var presentCategories: Set<ContentCategory> = []
+
+    /// Apps you have actually copied from, most-copied first. Drives the app
+    /// filter, so it only ever offers apps that lead somewhere.
+    @Published private(set) var presentSources: [ClipSource] = []
+
+    /// One app in the source filter: what to call it, which icon to draw, and
+    /// how many clips came from it.
+    struct ClipSource: Identifiable, Equatable {
+        var id: String { name }
+        let name: String
+        let bundleID: String?
+        let count: Int
+    }
+
+    /// Bumped whenever the history changes in any way. The search cache used to
+    /// key on `totalItemCount` alone, which misses a re-copy of something
+    /// already stored: the count stays put, the stale list is served, and the
+    /// clip looks like it was ignored.
+    @Published private(set) var historyRevision: Int = 0
     @Published var recentItems: [ClipboardItemViewModel] = []
     @Published private(set) var favoriteItemIDs: Set<UUID> = []
     
@@ -30,19 +57,19 @@ class ClipboardManager: ObservableObject {
     private let cacheSize = 1000
     
     // Duplicate detection
+    /// Content hashes seen this session. No longer used to block a capture:
+    /// that is what the short dedup window is for. Kept because deleting a clip
+    /// and clearing the history both maintain it, and the debug dump reads it.
     var recentHashes: Set<String> = []
     private let maxRecentHashes = 10000
-    // Short-window text dedup: catches voice-to-text apps that write the same
-    // content twice in quick succession. Doesn't block intentional re-copies later.
     /// Change count of a write Klippy made itself. Copying a clip back out puts
     /// it on the pasteboard, which the monitor then sees as brand new content and
     /// stores a second time. Hash dedup does not catch it, because it only
     /// compares against the previous capture, and a recalled clip is older than
     /// that. Without this, every copy-back-out duplicated the clip.
     private var selfWriteChangeCount: Int?
-    private var lastTextHash: String?
-    private var lastTextTimestamp: Date?
-    private let textDedupWindow: TimeInterval = 2.0
+    /// Pending read, cancelled and rescheduled each time the clipboard moves.
+    private var settleWork: DispatchWorkItem?
     private let favoritesDefaultsKey = "klippy.favoriteItemIDs"
 
     private struct ExportClipboardItem: Codable {
@@ -92,7 +119,7 @@ class ClipboardManager: ObservableObject {
     /// Bump `classifierGeneration` after changing a rule and every stored clip
     /// gets looked at once more. Images are left alone: their category comes
     /// from the data, not the text.
-    private static let classifierGeneration = 6
+    private static let classifierGeneration = 7
 
     private func reclassifyFakeFileClipsIfNeeded() {
         let flag = "didReclassifyContent_gen\(Self.classifierGeneration)"
@@ -151,6 +178,16 @@ class ClipboardManager: ObservableObject {
         monitoringTimer = nil
         lastChangeCount = pasteboard.changeCount
 
+        // Take whatever is already on the clipboard.
+        //
+        // Monitoring used to start by writing down the current change count and
+        // then waiting for the NEXT copy, so whatever you copied in the moments
+        // before Klippy started was never recorded. That covers the seconds
+        // after login, after an update, after a crash, and after a quit and
+        // reopen. From the user's side it is indistinguishable from a bug: you
+        // copied something, and it is not in your history.
+        captureWhateverIsAlreadyThere()
+
         // Keep polling active even while menu-bar UI is open (event tracking mode).
         let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
             self?.checkForClipboardChanges()
@@ -169,6 +206,32 @@ class ClipboardManager: ObservableObject {
         print("Clipboard monitoring stopped")
     }
     
+    /// Stores the current clipboard contents unless that exact clip is already
+    /// in the history. The check matters because otherwise every launch would
+    /// file another copy of the same thing.
+    private func captureWhateverIsAlreadyThere() {
+        guard !ClipboardPrivacy.shouldSkip(pasteboard) else { return }
+        processClipboardContent(skippingIfAlreadyStored: true)
+    }
+
+    /// True when this is already the most recent clip in the history.
+    ///
+    /// Only used by the startup read, and deliberately narrow. Klippy starting
+    /// up is not the user copying anything, so re-recording the same clipboard
+    /// state on every launch would put rows in the history that nobody created.
+    /// Anywhere else in the app, a repeat copy is a real copy and gets its own
+    /// row: the user decides what belongs in their history, not Klippy.
+    private func isAlreadyStored(hash: String) -> Bool {
+        let request = NSFetchRequest<NSDictionary>(entityName: "ClipboardItem")
+        request.resultType = .dictionaryResultType
+        request.propertiesToFetch = ["contentHash"]
+        request.sortDescriptors = [NSSortDescriptor(key: "createdAt", ascending: false)]
+        request.fetchLimit = 1
+        let context = PersistenceController.shared.container.viewContext
+        let newest = (try? context.fetch(request))?.first?["contentHash"] as? String
+        return newest == hash
+    }
+
     // MARK: - Clipboard Change Detection
     
     private func checkForClipboardChanges() {
@@ -186,14 +249,41 @@ class ClipboardManager: ObservableObject {
             return
         }
 
-        // Password managers and throwaway copies are marked on the pasteboard.
-        // Honour that before anything reads or hashes the content.
-        guard !ClipboardPrivacy.shouldSkip(pasteboard) else { return }
+        // One copy is one clip, however many times the app writes it.
+        //
+        // Cursor, Chrome and others do not write the clipboard once. They call
+        // clearContents and write, then do it again a few milliseconds later,
+        // usually to add a richer type. Every one of those bumps changeCount,
+        // and Klippy read each bump as a separate copy, so a single Command-C
+        // landed in the history twice. Measured here: every clip between
+        // 16:20 and 16:26 was recorded twice, from two different apps.
+        //
+        // This does NOT filter by content. Copy the same thing ten times and
+        // you get ten clips. It only waits for the clipboard to stop moving
+        // before reading it, so one burst of writes is one read. Nobody can
+        // press Command-C twice inside 200ms, so two real copies are still
+        // two clips even when they are identical.
+        settleWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            // Something arrived while waiting. That read owns this one.
+            guard self.pasteboard.changeCount == currentChangeCount else { return }
 
-        processClipboardContent()
+            // Password managers and throwaway copies are marked on the
+            // pasteboard. Honour that before anything reads or hashes it.
+            guard !ClipboardPrivacy.shouldSkip(self.pasteboard) else { return }
+
+            self.processClipboardContent()
+        }
+        settleWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.writeBurstWindow, execute: work)
     }
+
+    /// How long the clipboard has to hold still before Klippy reads it. Longer
+    /// than an app's own burst of writes, far shorter than two human copies.
+    private static let writeBurstWindow: TimeInterval = 0.2
     
-    private func processClipboardContent() {
+    private func processClipboardContent(skippingIfAlreadyStored: Bool = false) {
         // Get the current clipboard content
         let clipboardData = getClipboardContent()
 
@@ -202,10 +292,9 @@ class ClipboardManager: ObservableObject {
         if let batch = clipboardData.imageBatch, !batch.isEmpty {
             Task { @MainActor in
                 var stored = 0
-                for payload in batch {
+                for payload in batch where Self.isRealImage(payload.data) != nil {
                     let hash = payload.data.sha256
-                    guard !recentHashes.contains(hash) else { continue }
-                    recentHashes.insert(hash)
+                    if skippingIfAlreadyStored, isAlreadyStored(hash: hash) { continue }
                     await saveImageClipboardItem(imageData: payload.data,
                                                  imageSize: payload.size,
                                                  hash: hash)
@@ -220,6 +309,10 @@ class ClipboardManager: ObservableObject {
         let contentHash: String
         let contentType: String
         if let imageData = clipboardData.imageData {
+            guard Self.isRealImage(imageData) != nil else {
+                print("Pasteboard offered \(imageData.count) bytes that are not a picture, skipping")
+                return
+            }
             contentHash = imageData.sha256
             contentType = "image"
             print("Processing image: \(imageData.count) bytes, hash: \(String(contentHash.prefix(8)))...")
@@ -245,30 +338,19 @@ class ClipboardManager: ObservableObject {
             return // No content to process
         }
 
-        // Non-text content: permanent dedup via recentHashes.
-        // Text: short-window dedup only (catches apps that write twice in rapid succession
-        // like voice-to-text, but still allows intentional re-copy of the same text later).
-        if contentType == "text" {
-            if let lastHash = lastTextHash,
-               let lastTime = lastTextTimestamp,
-               lastHash == contentHash,
-               Date().timeIntervalSince(lastTime) < textDedupWindow {
-                print("Duplicate text within \(textDedupWindow)s window, skipping")
-                return
-            }
-            lastTextHash = contentHash
-            lastTextTimestamp = Date()
-        } else {
-            if recentHashes.contains(contentHash) {
-                print("Duplicate \(contentType) detected, skipping")
-                return
-            }
-            recentHashes.insert(contentHash)
-            if recentHashes.count > maxRecentHashes {
-                let hashesToRemove = Array(recentHashes.prefix(recentHashes.count - maxRecentHashes))
-                hashesToRemove.forEach { recentHashes.remove($0) }
-            }
+        if skippingIfAlreadyStored, isAlreadyStored(hash: contentHash) {
+            print("Clipboard already holds the newest clip, not recording it twice")
+            return
         }
+
+        // No deduplication. Copy the same thing a thousand times and you get a
+        // thousand clips, each with its own timestamp.
+        //
+        // Klippy used to throw copies away: images forever, text within a short
+        // window. Both were decisions about the user's own history that the app
+        // had no business making. If something ends up in there twice, that is
+        // because it was copied twice, and deleting one of them is the user's
+        // call, not the app's.
 
         print("New \(contentType) content, adding to history")
 
@@ -611,14 +693,44 @@ class ClipboardManager: ObservableObject {
 
         return withSecurityScopedAccess(to: url) { () -> Data? in
             guard let data = try? Data(contentsOf: url) else { return nil }
-            // Normalise to PNG so every stored clip decodes the same way later.
-            guard let image = NSImage(data: data) else { return nil }
             print("Read image file from disk: \(data.count) bytes")
+            // Normalise to PNG so every stored clip decodes the same way later.
+            if let png = Self.downsizedPNG(from: data) { return png }
+            guard let image = NSImage(data: data) else { return nil }
             return convertImageToPNG(image)
         } ?? nil
     }
 
-    private func getImageFromPasteboard() -> Data? {
+    /// Are these bytes really a picture?
+    ///
+    /// The last line of defence. A clip stored as an image whose data does not
+    /// decode is worse than no clip at all: it takes a row in the history, it
+    /// claims a size in its footer, it draws as an empty card, and copying it
+    /// back out gives you nothing. Two of these are in the real database, both
+    /// 38 bytes of pasteboard placeholder.
+    static func isRealImage(_ data: Data) -> NSSize? {
+        // Smaller than any real encoded picture, and the exact shape of the
+        // placeholders that caused this.
+        guard data.count >= 64 else { return nil }
+        guard let image = NSImage(data: data) else { return nil }
+        let size = image.size
+        guard size.width >= 1, size.height >= 1 else { return nil }
+        return size
+    }
+
+    /// Formats worth keeping byte-for-byte when re-encoding fails.
+    private static let storableImageTypes: Set<NSPasteboard.PasteboardType> = [
+        .png,
+        NSPasteboard.PasteboardType("public.jpeg"),
+        NSPasteboard.PasteboardType("public.jpg"),
+        NSPasteboard.PasteboardType("com.compuserve.gif"),
+        NSPasteboard.PasteboardType("com.microsoft.bmp"),
+        NSPasteboard.PasteboardType("public.heic"),
+        NSPasteboard.PasteboardType("public.heif"),
+        NSPasteboard.PasteboardType("public.webp")
+    ]
+
+    func getImageFromPasteboard() -> Data? {
         let availableTypes = pasteboard.types ?? []
 
         // PHASE 0: A copied image FILE must be read from disk.
@@ -630,14 +742,13 @@ class ClipboardManager: ObservableObject {
             return fileData
         }
 
-        // PHASE 0b: Try typed NSImage read (some apps provide images this way only)
-        if let imageObjects = pasteboard.readObjects(forClasses: [NSImage.self], options: nil) as? [NSImage],
-           let image = imageObjects.first {
-            print("Found NSImage object on pasteboard")
-            return convertImageToPNG(image)
-        }
-
-        // PHASE 1: Check standard image types first
+        // PHASE 1: the bytes the pasteboard already holds.
+        //
+        // This runs BEFORE the NSImage object read below, and that order is the
+        // whole point. `readObjects(forClasses: [NSImage.self])` decodes the
+        // picture into an NSImage and the only way back out is the six-pass
+        // NSImage route, so putting it first meant the one-pass encoder here was
+        // never reached and a 1600x1200 copy took most of a second to appear.
         let standardImageTypes: [NSPasteboard.PasteboardType] = [
             .tiff,
             .png,
@@ -657,14 +768,52 @@ class ClipboardManager: ObservableObject {
                 print("Checking standard image type: \(type.rawValue)")
                 if let imageData = pasteboard.data(forType: type) {
                     print("Found image data for type \(type.rawValue): \(imageData.count) bytes")
-                    if let image = NSImage(data: imageData) {
+
+                    // Already a PNG, already small enough: keep the bytes.
+                    //
+                    // Re-encoding them costs two full TIFF round trips and a PNG
+                    // encode on the main thread for no gain, and that is most of
+                    // why a copied picture took the best part of a second to show
+                    // up while text took a third of that.
+                    if type == .png,
+                       let size = Self.isRealImage(imageData),
+                       size.width <= Self.maxStoredEdge, size.height <= Self.maxStoredEdge {
+                        print("Keeping the original PNG, no re-encode needed")
+                        return imageData
+                    }
+
+                    if let png = Self.downsizedPNG(from: imageData) {
+                        print("Encoded \(type.rawValue) in one pass")
+                        return png
+                    }
+                    if let image = NSImage(data: imageData),
+                       let png = convertImageToPNG(image) {
                         print("Successfully created NSImage from standard type")
-                        return convertImageToPNG(image)
-                    } else {
-                        print("Failed to create NSImage from standard type data")
+                        return png
+                    }
+                    // Re-encoding failed, but these bytes ARE the picture and
+                    // every one of these types is something macOS can draw.
+                    // Keeping them verbatim beats losing the clip.
+                    if Self.storableImageTypes.contains(type), isImageHeader(imageData) {
+                        print("Storing \(type.rawValue) bytes as they are")
+                        return imageData
                     }
                 }
             }
+        }
+
+        // PHASE 1b: Typed NSImage read, for apps that offer an image no other way.
+        //
+        // Note the `if let`, not `return`. Every phase below used to return the
+        // result of a conversion directly, so one image NSImage could not
+        // re-encode ended the whole search and the clip fell through to being
+        // stored as text, usually just its filename. A phase that fails now
+        // hands over to the next one.
+        if let imageObjects = pasteboard.readObjects(forClasses: [NSImage.self], options: nil) as? [NSImage],
+           let image = imageObjects.first,
+           let png = convertImageToPNG(image) {
+            print("Found NSImage object on pasteboard")
+            return png
         }
 
         // PHASE 2: Check WebKit custom pasteboard data
@@ -674,9 +823,10 @@ class ClipboardManager: ObservableObject {
             if let webkitData = pasteboard.data(forType: webkitType) {
                 print("Found WebKit data: \(webkitData.count) bytes")
                 // WebKit data might contain image data in a custom format
-                if let image = extractImageFromWebKitData(webkitData) {
+                if let image = extractImageFromWebKitData(webkitData),
+                   let png = convertImageToPNG(image) {
                     print("Successfully extracted image from WebKit data")
-                    return convertImageToPNG(image)
+                    return png
                 }
             }
         }
@@ -697,9 +847,17 @@ class ClipboardManager: ObservableObject {
                 print("Found data for \(type.rawValue): \(data.count) bytes")
 
                 // Try to create an NSImage from the data
-                if let image = NSImage(data: data) {
+                if let image = NSImage(data: data),
+                   let png = convertImageToPNG(image) {
                     print("Successfully created NSImage from type: \(type.rawValue)")
-                    return convertImageToPNG(image)
+                    return png
+                }
+                // Last resort: the bytes start with a real image file's magic
+                // number, so store them even though nothing could decode them
+                // into an NSImage right now.
+                if isImageHeader(data) {
+                    print("Storing raw image bytes from \(type.rawValue)")
+                    return data
                 }
 
                 // For very small data, log what it contains
@@ -861,6 +1019,36 @@ class ClipboardManager: ObservableObject {
         return false
     }
 
+    /// Longest edge a stored picture is allowed to have.
+    static let maxStoredEdge: CGFloat = 1024
+
+    /// Decodes, shrinks and re-encodes a picture in one pass.
+    ///
+    /// The old route went through NSImage and did six passes over the pixels:
+    /// encode to TIFF, decode it, redraw at the new size, encode TIFF again,
+    /// decode again, encode PNG. Measured on a 1600x1200 clip, that was 670ms
+    /// of the 900ms a copied picture took to appear, all on the main thread.
+    /// ImageIO does the decode and the downsize together.
+    static func downsizedPNG(from data: Data, maxEdge: CGFloat = maxStoredEdge) -> Data? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            // Honours the EXIF orientation, so a phone photo does not come out
+            // on its side.
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: Int(maxEdge)
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return nil
+        }
+        let out = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            out, UTType.png.identifier as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(destination, cgImage, nil)
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        return out as Data
+    }
+
     private func convertImageToPNG(_ image: NSImage) -> Data? {
         guard let tiffData = image.tiffRepresentation,
               let bitmapRep = NSBitmapImageRep(data: tiffData) else {
@@ -868,7 +1056,7 @@ class ClipboardManager: ObservableObject {
         }
 
         // Resize if too large (max 1024x1024 for performance)
-        let maxSize: CGFloat = 1024
+        let maxSize: CGFloat = Self.maxStoredEdge
         let originalSize = image.size
 
         if originalSize.width > maxSize || originalSize.height > maxSize {
@@ -982,7 +1170,7 @@ class ClipboardManager: ObservableObject {
 
         // Hashes already here, so a re-import is a no-op rather than a
         // second copy of everything.
-        let existing = existingContentHashes()
+        let existing = existingClipKeys()
         var takenIDs = existingIdentifiers()
 
         var added = 0
@@ -1017,10 +1205,76 @@ class ClipboardManager: ObservableObject {
             takenIDs = result.takenIDs
         }
 
+        let savedAdded = await importSnippets(from: source)
+
         if added > 0 {
             refreshHistory()
         }
+        if savedAdded > 0 {
+            SnippetManager.shared.loadSnippets()
+        }
         return (added, skipped)
+    }
+
+    /// Saved clips live in a different entity, and the import only ever walked
+    /// ClipboardItem. So someone importing an old database got every clip back
+    /// and an empty Saved tab, with nothing to say their saved clips had been
+    /// left behind.
+    @MainActor
+    private func importSnippets(from source: NSManagedObjectContext) async -> Int {
+        let context = PersistenceController.shared.container.newBackgroundContext()
+        context.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+
+        let incoming: [[String: Any]] = await withCheckedContinuation { continuation in
+            source.perform {
+                let request = NSFetchRequest<NSManagedObject>(entityName: "SavedSnippet")
+                let rows = (try? source.fetch(request)) ?? []
+                let names: [String] = rows.first.map { Array($0.entity.attributesByName.keys) } ?? []
+                continuation.resume(returning: rows.map { row in
+                    var values: [String: Any] = [:]
+                    for name in names where row.value(forKey: name) != nil {
+                        values[name] = row.value(forKey: name)
+                    }
+                    return values
+                })
+            }
+        }
+        guard !incoming.isEmpty else { return 0 }
+
+        return await withCheckedContinuation { continuation in
+            context.perform {
+                // Name AND content, not content alone. Two saved clips can
+                // hold the same thing under different names, and matching on
+                // content dropped the second one: a real import lost a saved
+                // link called "helix" because another saved clip pointed at
+                // the same URL.
+                func key(_ title: Any?, _ content: Any?) -> String {
+                    "\((title as? String) ?? "")\u{1F}\((content as? String) ?? "")"
+                }
+
+                let existing: Set<String> = {
+                    let request = NSFetchRequest<NSManagedObject>(entityName: "SavedSnippet")
+                    let rows = (try? context.fetch(request)) ?? []
+                    return Set(rows.map { key($0.value(forKey: "title"), $0.value(forKey: "content")) })
+                }()
+
+                var added = 0
+                var seen = existing
+                for values in incoming {
+                    let rowKey = key(values["title"], values["content"])
+                    if seen.contains(rowKey) { continue }
+                    seen.insert(rowKey)
+                    let row = NSEntityDescription.insertNewObject(forEntityName: "SavedSnippet",
+                                                                 into: context)
+                    for (key, value) in values { row.setValue(value, forKey: key) }
+                    // A clashing id would silently replace an existing row.
+                    row.setValue(UUID(), forKey: "id")
+                    added += 1
+                }
+                if added > 0 { try? context.save() }
+                continuation.resume(returning: added)
+            }
+        }
     }
 
     /// Every clip id already in this store, so an import cannot reuse one.
@@ -1033,12 +1287,31 @@ class ClipboardManager: ObservableObject {
     }
 
     /// Every content hash already in this store.
-    private func existingContentHashes() -> Set<String> {
+    /// What an import treats as "already here": the content AND the moment it
+    /// was copied, not the content alone.
+    ///
+    /// Keying on content alone collapses a clipboard history. Copying your own
+    /// email address on Monday, again on Thursday and again in June is three
+    /// clips at three times, and the old rule kept one of them. Measured on a
+    /// real 26,345 clip database: 6,881 rows, better than a quarter of the
+    /// history, were repeat copies and every one was dropped on import.
+    ///
+    /// Pairing the hash with the timestamp still makes importing the same file
+    /// twice a no-op, which is the thing the rule was there for.
+    private func existingClipKeys() -> Set<String> {
         let request = NSFetchRequest<NSDictionary>(entityName: "ClipboardItem")
         request.resultType = .dictionaryResultType
-        request.propertiesToFetch = ["contentHash"]
+        request.propertiesToFetch = ["contentHash", "createdAt"]
         let rows = (try? PersistenceController.shared.container.viewContext.fetch(request)) ?? []
-        return Set(rows.compactMap { $0["contentHash"] as? String })
+        return Set(rows.compactMap { Self.clipKey($0 as? [String: Any] ?? [:]) })
+    }
+
+    /// Whole seconds: Core Data round-trips a `Date` through a float, so two
+    /// copies of the same row can differ in the last few decimal places.
+    private static func clipKey(_ values: [String: Any]) -> String? {
+        guard let hash = values["contentHash"] as? String else { return nil }
+        guard let created = values["createdAt"] as? Date else { return hash }
+        return "\(hash)|\(Int(created.timeIntervalSince1970.rounded()))"
     }
 
     private func insert(_ rows: [[String: Any]],
@@ -1057,8 +1330,8 @@ class ClipboardManager: ObservableObject {
                 var seen = existing
                 var takenIDs = takenIDs
                 for values in rows {
-                    let hash = values["contentHash"] as? String
-                    if let hash, seen.contains(hash) {
+                    let key = Self.clipKey(values)
+                    if let key, seen.contains(key) {
                         skipped += 1
                         continue
                     }
@@ -1082,7 +1355,7 @@ class ClipboardManager: ObservableObject {
                             takenIDs.insert(incoming!)
                         }
                     }
-                    if let hash { seen.insert(hash) }
+                    if let key { seen.insert(key) }
                     added += 1
                 }
                 do {
@@ -1105,8 +1378,6 @@ class ClipboardManager: ObservableObject {
         for image in images {
             guard let data = convertImageToPNG(image) else { continue }
             let hash = data.sha256
-            guard !recentHashes.contains(hash) else { continue }
-            recentHashes.insert(hash)
             await saveImageClipboardItem(imageData: data,
                                          imageSize: image.size,
                                          hash: hash)
@@ -1118,6 +1389,15 @@ class ClipboardManager: ObservableObject {
 
     @MainActor
     private func saveImageClipboardItem(imageData: Data, imageSize: NSSize, hash: String) async {
+        // Every route into here goes through this, including drops and imports.
+        guard let realSize = Self.isRealImage(imageData) else {
+            print("Refusing to store \(imageData.count) bytes as an image: not a picture")
+            return
+        }
+        // Trust the decoded size over whatever the caller worked out: a
+        // placeholder read mid-write reported 341x1024 for 38 bytes.
+        let imageSize = imageSize.width >= 1 && imageSize.height >= 1 ? imageSize : realSize
+
         // Same as above: the source has to be read here, on the main actor.
         let source = currentSourceApp()
 
@@ -1673,6 +1953,7 @@ class ClipboardManager: ObservableObject {
                     self.recentHashes.removeAll()
                     self.favoriteItemIDs.removeAll()
                     self.persistFavoriteIDs()
+                    SecretStore.shared.forgetAll()
                 }
             } catch {
                 print("Failed to clear all items: \(error)")
@@ -1704,6 +1985,7 @@ class ClipboardManager: ObservableObject {
                     if self.favoriteItemIDs.remove(itemId) != nil {
                         self.persistFavoriteIDs()
                     }
+                    SecretStore.shared.forget(itemId)
                     self.updateTotalItemCount()
                 }
             } catch {
@@ -1864,7 +2146,8 @@ class ClipboardManager: ObservableObject {
                     panel.nameFieldStringValue = self.defaultExportFileName()
                     panel.canCreateDirectories = true
 
-                    if panel.runModal() == .OK, let url = panel.url {
+                    if PanelController.withModalSession({ panel.runModal() }) == .OK,
+                       let url = panel.url {
                         do {
                             try jsonData.write(to: url, options: .atomic)
                             print("Exported clipboard history to \(url.path)")
@@ -1906,8 +2189,71 @@ class ClipboardManager: ObservableObject {
     }
 
     func refreshHistory() {
+        if Thread.isMainThread {
+            historyRevision &+= 1
+        } else {
+            DispatchQueue.main.async { [weak self] in self?.historyRevision &+= 1 }
+        }
         updateTotalItemCount()
         loadRecentItems()
+        updatePresentCategories()
+        updatePresentSources()
+    }
+
+    /// Counts clips per source app in one grouped query rather than a scan.
+    private func updatePresentSources() {
+        backgroundContext.perform { [weak self] in
+            guard let self else { return }
+            let request = NSFetchRequest<NSDictionary>(entityName: "ClipboardItem")
+            request.resultType = .dictionaryResultType
+            request.predicate = NSPredicate(format: "sourceApplication != nil")
+
+            let count = NSExpressionDescription()
+            count.name = "tally"
+            count.expression = NSExpression(forFunction: "count:",
+                                            arguments: [NSExpression(forKeyPath: "sourceApplication")])
+            count.expressionResultType = .integer64AttributeType
+
+            // Grouped by name AND bundle id, so the icon comes along. An app
+            // renamed over the years can appear under both ids; the counts are
+            // folded back together below and the newest id wins the icon.
+            request.propertiesToFetch = ["sourceApplication", "sourceBundleIdentifier", count]
+            request.propertiesToGroupBy = ["sourceApplication", "sourceBundleIdentifier"]
+
+            let rows = (try? self.backgroundContext.fetch(request)) ?? []
+            var tally: [String: (bundleID: String?, count: Int)] = [:]
+            for row in rows {
+                guard let name = (row["sourceApplication"] as? String)?
+                        .trimmingCharacters(in: .whitespaces), !name.isEmpty,
+                      let n = (row["tally"] as? NSNumber)?.intValue else { continue }
+                let bundleID = row["sourceBundleIdentifier"] as? String
+                let existing = tally[name]
+                tally[name] = (existing?.bundleID ?? bundleID, (existing?.count ?? 0) + n)
+            }
+            let sources = tally
+                .map { ClipSource(name: $0.key, bundleID: $0.value.bundleID, count: $0.value.count) }
+                .sorted { $0.count > $1.count }
+
+            DispatchQueue.main.async { self.presentSources = sources }
+        }
+    }
+
+    /// One distinct-values query rather than a scan of every row.
+    private func updatePresentCategories() {
+        backgroundContext.perform { [weak self] in
+            guard let self else { return }
+            let request = NSFetchRequest<NSDictionary>(entityName: "ClipboardItem")
+            request.resultType = .dictionaryResultType
+            request.propertiesToFetch = ["contentType"]
+            request.returnsDistinctResults = true
+
+            let rows = (try? self.backgroundContext.fetch(request)) ?? []
+            let found = Set(rows.compactMap { row -> ContentCategory? in
+                guard let raw = (row["contentType"] as? NSNumber)?.int16Value else { return nil }
+                return ContentCategory(rawValue: raw)
+            })
+            DispatchQueue.main.async { self.presentCategories = found }
+        }
     }
 
     private func defaultExportFileName() -> String {

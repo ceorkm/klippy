@@ -154,6 +154,9 @@ struct PanelSettingsView: View {
                     RoundedRectangle(cornerRadius: 9, style: .continuous)
                         .fill(isOn ? skin.accent : .clear)
                 )
+                // A clear fill is not hit-testable, so the unselected half of a
+                // segment was only clickable on its label.
+                .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
         }
         .buttonStyle(.plain)
     }
@@ -431,6 +434,7 @@ struct PanelSettingsView: View {
                     RoundedRectangle(cornerRadius: 9, style: .continuous)
                         .fill(autoDeleteDays == days ? skin.accent : .clear)
                 )
+                .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
         }
         .buttonStyle(.plain)
     }
@@ -451,7 +455,7 @@ struct PanelSettingsView: View {
             alert.addButton(withTitle: "Delete \(count)")
             alert.addButton(withTitle: "Cancel")
 
-            if alert.runModal() == .alertFirstButtonReturn {
+            if PanelController.withModalSession({ alert.runModal() }) == .alertFirstButtonReturn {
                 autoDeleteDays = days
                 ClipboardManager.shared.pruneUnusedClips(olderThanDays: days)
             }
@@ -500,7 +504,8 @@ struct PanelSettingsView: View {
         panel.directoryURL = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Library/Application Support/Klippy", isDirectory: true)
 
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard PanelController.withModalSession({ panel.runModal() }) == .OK,
+              let url = panel.url else { return }
 
         importing = true
         Task { @MainActor in
@@ -521,7 +526,7 @@ struct PanelSettingsView: View {
                     : "Your older history has been merged in."
             }
             alert.addButton(withTitle: "OK")
-            alert.runModal()
+            PanelController.withModalSession { alert.runModal() }
         }
     }
 
@@ -541,7 +546,7 @@ struct PanelSettingsView: View {
         """
         alert.addButton(withTitle: "Export")
         alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard PanelController.withModalSession({ alert.runModal() }) == .alertFirstButtonReturn else { return }
         ClipboardManager.shared.exportHistoryAsJSON()
     }
 
@@ -584,7 +589,7 @@ struct PanelSettingsView: View {
         alert.alertStyle = .critical
         alert.addButton(withTitle: "Delete Everything")
         alert.addButton(withTitle: "Cancel")
-        if alert.runModal() == .alertFirstButtonReturn {
+        if PanelController.withModalSession({ alert.runModal() }) == .alertFirstButtonReturn {
             ClipboardManager.shared.clearAllItems()
         }
     }

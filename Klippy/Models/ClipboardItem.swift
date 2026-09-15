@@ -512,9 +512,30 @@ struct ClipboardItemViewModel: Identifiable {
     }
 
     // Image-related computed properties
+    /// Decoded pictures, kept so scrolling does not re-decode them.
+    ///
+    /// `nsImage` is read from inside view bodies, and SwiftUI re-runs a body
+    /// many times while a list scrolls. ClipCardView alone asked for it three
+    /// times per pass (showsMedia, preview, mediaImage), so every visible image
+    /// card was decoding a megabyte PNG over and over while you dragged the
+    /// scrollbar. That is the sluggishness.
+    ///
+    /// NSCache is thread-safe and gives memory back automatically when the
+    /// system asks, so this cannot grow into a leak.
+    private static let decodedImages: NSCache<NSUUID, NSImage> = {
+        let cache = NSCache<NSUUID, NSImage>()
+        cache.countLimit = 80
+        cache.totalCostLimit = 96 * 1024 * 1024
+        return cache
+    }()
+
     var nsImage: NSImage? {
         guard isImage, let imageData = imageData else { return nil }
-        return NSImage(data: imageData)
+        let key = id as NSUUID
+        if let cached = Self.decodedImages.object(forKey: key) { return cached }
+        guard let image = NSImage(data: imageData) else { return nil }
+        Self.decodedImages.setObject(image, forKey: key, cost: imageData.count)
+        return image
     }
 
     var imageSizeString: String {
@@ -522,7 +543,17 @@ struct ClipboardItemViewModel: Identifiable {
         return "\(imageWidth)×\(imageHeight)"
     }
 
+    /// Same reasoning as `nsImage`, and worse: this one redraws through
+    /// lockFocus every time it is asked.
+    private static let thumbnails: NSCache<NSUUID, NSImage> = {
+        let cache = NSCache<NSUUID, NSImage>()
+        cache.countLimit = 300
+        return cache
+    }()
+
     var thumbnailImage: NSImage? {
+        let key = id as NSUUID
+        if let cached = Self.thumbnails.object(forKey: key) { return cached }
         guard let image = nsImage else { return nil }
 
         let thumbnailSize = NSSize(width: 64, height: 64)
@@ -535,6 +566,7 @@ struct ClipboardItemViewModel: Identifiable {
                   fraction: 1.0)
         thumbnail.unlockFocus()
 
+        Self.thumbnails.setObject(thumbnail, forKey: key)
         return thumbnail
     }
 
