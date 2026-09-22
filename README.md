@@ -1,58 +1,75 @@
+<div align="center">
+
+<img src="Klippy/Assets.xcassets/AppIcon.appiconset/icon_256x256@2x.png" width="120" alt="Klippy">
+
 # Klippy
 
-Everything you copy, kept and searchable, without ever leaving your Mac.
+**Everything you copy, kept and searchable, without ever leaving your Mac.**
 
-Klippy is a clipboard manager that lives in the menu bar. Press Ctrl-Cmd-V and
-everything you have copied is right there, sorted and searchable. Native SwiftUI
-and AppKit. No Electron, no account, no server, no telemetry.
+<a href="https://apps.apple.com/us/app/clipboard-manager-klippy/id6812303323">
+  <img src="https://toolbox.marketingtools.apple.com/api/v2/badges/download-on-the-mac-app-store/black/en-us" height="54" alt="Download on the Mac App Store">
+</a>
 
-Requires macOS 13 or later.
+<br>
+
+<img src="https://img.shields.io/github/v/release/ceorkm/klippy?style=flat-square&color=2E3B2A&labelColor=1a1a1a" alt="Latest release">
+<img src="https://img.shields.io/badge/macOS-13%2B-2E3B2A?style=flat-square&labelColor=1a1a1a" alt="macOS 13+">
+<img src="https://img.shields.io/badge/Swift-SwiftUI%20%2B%20AppKit-2E3B2A?style=flat-square&labelColor=1a1a1a" alt="SwiftUI and AppKit">
+<img src="https://img.shields.io/github/license/ceorkm/klippy?style=flat-square&color=2E3B2A&labelColor=1a1a1a" alt="MIT licence">
+
+<br><br>
+
+<img src="docs/hero.png" width="100%" alt="Klippy panel showing clipboard history, search and images">
+
+</div>
+
+<br>
+
+## See it work
+
+https://github.com/ceorkm/klippy/raw/main/docs/demo.mp4
+
+If your browser does not play that inline, [download the clip](docs/demo.mp4).
+
+<br>
 
 ## What it does
 
-**Keeps your history.** Every copy lands in a searchable list, grouped by day.
-Text, images, files, colours. Click one to put it back on the clipboard.
+|   | |
+|:---:|:---|
+| <img src="docs/icons/clipboard-list.svg" width="22"> | **Keeps your history.** Every copy lands in a searchable list, grouped by day. Text, images, files, colours. Click one to put it back on the clipboard. |
+| <img src="docs/icons/blend.svg" width="22"> | **Sorts it for you.** Klippy reads what you copied and files it: links, images, files, colours, code, emails, API keys, card numbers, JSON, phone numbers, addresses. |
+| <img src="docs/icons/search.svg" width="22"> | **Finds anything.** Search months of history, or narrow by kind, by date, or by the app you copied from. |
+| <img src="docs/icons/pin.svg" width="22"> | **Pin, save, merge.** Pin a clip to the top. Save one with a name. Select several and merge them into one clip, then open it later to get the pieces back. |
+| <img src="docs/icons/keyboard.svg" width="22"> | **Stays out of the way.** `⌃⌘V` opens the panel. `⌃⌘1` to `⌃⌘0` recall a clip instantly. `⌃⌘↓` walks back through recent ones. Every shortcut is rebindable. |
+| <img src="docs/icons/palette.svg" width="22"> | **Looks how you want.** Seven skins, two flat and five photographic, or drop in a picture of your own. Two widths, three text sizes. |
 
-**Sorts it for you.** Klippy reads what you copied and files it: links, social
-links, images, files, colours, code, emails, API keys, card numbers, JSON,
-Markdown, numbers, dates, phone numbers, addresses, IP addresses. Filter by any
-of them, or by date, including a custom range.
-
-**Pin, save, merge.** Pin a clip to keep it at the top. Save one with a name.
-Select several and merge them into a single clip, then expand it again later to
-see the parts.
-
-**Gets out of your way.** Ctrl-Cmd-V opens the panel. Ctrl-Cmd-1 through 0
-recall a slot directly. Ctrl-Cmd-Down walks back through recent clips. Every
-shortcut can be rebound in Settings.
-
-**Looks how you want.** Seven skins, two flat and five photographic, or your own
-picture, plus panel width and text size.
+<br>
 
 ## Privacy
 
 This is a clipboard manager, so it is worth being specific.
 
-- Your history is stored in `~/Library/Application Support/Klippy` and is never
-  uploaded anywhere. There is no server and no account.
-- Klippy skips anything an app marks as concealed, so password managers are
-  ignored rather than recorded. This follows the
-  [nspasteboard.org](http://nspasteboard.org) convention and is on by default.
-- Throwaway copies that automation tools mark as transient are never recorded.
-- You can mark any clip secret by hand to hide its contents in the list, and
-  tell Klippy to never record whole kinds of thing, such as card numbers.
-- Klippy needs no Accessibility permission, no Screen Recording permission and
-  no Full Disk Access. The global shortcuts use a system API that does not
-  require handing over control of your Mac.
+|   | |
+|:---:|:---|
+| <img src="docs/icons/wifi-off.svg" width="22"> | Your history lives in `~/Library/Application Support/Klippy` and is never uploaded. No account, no server, no analytics. |
+| <img src="docs/icons/shield-check.svg" width="22"> | Anything a password manager marks as concealed is skipped, not recorded. This follows the [nspasteboard.org](http://nspasteboard.org) convention and is on by default. Throwaway copies marked transient are always skipped too. |
+| <img src="docs/icons/bookmark.svg" width="22"> | Mark any clip secret to hide it in the list, or tell Klippy never to record whole categories such as card numbers. |
+| <img src="docs/icons/image.svg" width="22"> | No Accessibility permission, no Screen Recording, no Full Disk Access. The global shortcuts use a system API that needs none of them. |
 
-**The one network feature.** "Load link previews" in Settings asks a site you
-copied for its own preview image, the way a chat app shows a thumbnail. The
-request goes to that site and nowhere else. Links that carry a credential or
-act the moment they load, such as a password reset or a sign-in link, are never
-fetched, so a preview can never burn a one-time link. Turn the setting off and
-Klippy never touches the network at all.
+**The one network feature.** "Load link previews" asks a site you copied for its own preview image, the way a chat app shows a thumbnail. The request goes to that site and nowhere else. Links that carry a sign-in token or act the moment they open, such as a password reset, are never fetched. Turn the setting off and Klippy never touches the network at all.
 
 Full details in [PRIVACY.md](PRIVACY.md).
+
+<br>
+
+## Install
+
+**[Get it on the Mac App Store](https://apps.apple.com/us/app/clipboard-manager-klippy/id6812303323)**, free, sandboxed and updated automatically.
+
+Or grab the [latest release](https://github.com/ceorkm/klippy/releases/latest). The disk image is signed with a Developer ID, notarized by Apple and stapled, so it opens with no warning and verifies even offline.
+
+<br>
 
 ## Build it
 
@@ -64,17 +81,13 @@ xcodebuild -project Klippy.xcodeproj -scheme Klippy -configuration Debug build
 
 Or open `Klippy.xcodeproj` in Xcode and press Run.
 
-Tests:
-
 ```sh
 xcodebuild test -project Klippy.xcodeproj -scheme Klippy -destination 'platform=macOS'
 ```
 
-## Release
+`package.sh` builds, signs, notarizes and staples a DMG. It reads the signing identity from `.release.env`, which is not committed. Copy `.release.env.example` and fill in your own.
 
-`package.sh` builds, signs with a Developer ID certificate, notarizes and
-staples a DMG. It reads the signing identity from `.release.env`, which is not
-committed. Copy `.release.env.example` and fill in your own values.
+<br>
 
 ## How it is put together
 
@@ -88,14 +101,14 @@ committed. Copy `.release.env.example` and fill in your own values.
 | `Views/KlippyPanel` | The panel itself |
 | `Utils/Skin` | Colour tokens for the skins |
 
-Storage is Core Data on SQLite in WAL mode, with writes on a background context
-so the panel never waits on the disk. Capture waits for the clipboard to stop
-moving before reading it, so one copy is one clip however many times the app
-you copied from rewrites the pasteboard.
+Storage is Core Data on SQLite in WAL mode, with writes on a background context so the panel never waits on the disk. Capture waits for the clipboard to stop moving before reading it, so one copy is one clip however many times the app you copied from rewrites the pasteboard.
+
+<br>
 
 ## Licence
 
 MIT. See [LICENSE](LICENSE).
 
-Brand marks shown beside copied links remain the trademarks of their owners and
-appear only to identify the site a link points to.
+Brand marks shown beside copied links remain the trademarks of their owners and appear only to identify the site a link points to. Interface icons in this document are [Lucide](https://lucide.dev), ISC licensed.
+
+<div align="center"><br><sub>Built in SwiftUI and AppKit. No Electron.</sub></div>

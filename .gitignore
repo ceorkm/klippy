@@ -97,8 +97,8 @@ Klippy/*.mov
 *.mp4
 *.mov
 .shots-build/
-# ...except the site's own demo, which is part of the site.
-!site/assets/*.mp4
+# ...except the README's demo clip, which has to be tracked to render.
+!docs/*.mp4
 
 # Agent tooling. Installed per-machine, never part of the product.
 .claude/
@@ -117,3 +117,8 @@ klippy-launch/dist/
 *.key
 AuthKey_*
 .release.env
+
+# Marketing lives outside the app repo. The landing page and the launch film
+# project stay local; this repo is the app.
+site/
+klippy-launch/
