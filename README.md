@@ -25,14 +25,6 @@
 
 <br>
 
-## See it work
-
-https://github.com/ceorkm/klippy/raw/main/docs/demo.mp4
-
-If your browser does not play that inline, [download the clip](docs/demo.mp4).
-
-<br>
-
 ## What it does
 
 |   | |

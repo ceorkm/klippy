@@ -97,8 +97,6 @@ Klippy/*.mov
 *.mp4
 *.mov
 .shots-build/
-# ...except the README's demo clip, which has to be tracked to render.
-!docs/*.mp4
 
 # Agent tooling. Installed per-machine, never part of the product.
 .claude/
