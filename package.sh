@@ -46,12 +46,28 @@ echo "==> [2/6] Verifying app signature"
 codesign --verify --strict --verbose=2 "${APP_OUT}"
 codesign -dvv "${APP_OUT}" 2>&1 | grep -E "Authority|TeamIdentifier|Runtime" | head
 
-echo "==> [3/6] Staging app for DMG"
+# Notarize and staple the .app BEFORE it goes into the DMG.
+#
+# Stapling only the DMG leaves the app itself without a ticket. Once the user
+# drags it to Applications, Gatekeeper falls back to an online check, and on a
+# machine with broken DNS that times out and the app looks unsigned. A ticket
+# on the bundle makes it work offline. This cost us hours once already.
+echo "==> [3/8] Notarizing the app bundle"
+APP_ZIP="${DERIVED}/Klippy-app.zip"
+rm -f "${APP_ZIP}"
+ditto -c -k --keepParent "${APP_OUT}" "${APP_ZIP}"
+xcrun notarytool submit "${APP_ZIP}" --keychain-profile "${NOTARY_PROFILE}" --wait
+
+echo "==> [4/8] Stapling the app bundle"
+xcrun stapler staple "${APP_OUT}"
+xcrun stapler validate "${APP_OUT}"
+
+echo "==> [5/8] Staging app for DMG"
 rm -rf "${STAGING}"
 mkdir -p "${STAGING}"
 cp -R "${APP_OUT}" "${STAGING}/Klippy.app"
 
-echo "==> [4/6] Building DMG -> ${DMG_OUT}"
+echo "==> [6/8] Building DMG -> ${DMG_OUT}"
 rm -f "${DMG_OUT}" dist/rw.*.dmg
 create-dmg \
   --volname "Klippy" \
@@ -65,12 +81,12 @@ create-dmg \
   "${DMG_OUT}" \
   "${STAGING}/Klippy.app"
 
-echo "==> [5/6] Notarizing ${DMG_OUT} (profile: ${NOTARY_PROFILE})"
+echo "==> [7/8] Notarizing ${DMG_OUT} (profile: ${NOTARY_PROFILE})"
 xcrun notarytool submit "${DMG_OUT}" \
   --keychain-profile "${NOTARY_PROFILE}" \
   --wait
 
-echo "==> [6/6] Stapling"
+echo "==> [8/8] Stapling"
 xcrun stapler staple "${DMG_OUT}"
 xcrun stapler validate "${DMG_OUT}"
 spctl -a -t open --context context:primary-signature -vv "${DMG_OUT}" || true
