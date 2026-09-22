@@ -847,7 +847,27 @@ class ContentClassifier {
             return length == 15
         }
         
-        // Discover
+        // Verve, the Nigerian scheme.
+        //
+        // Missing until now, which meant a Verve card was filed as "Numbers"
+        // rather than a payment card. Every international scheme was covered
+        // and the one most likely to be in a Nigerian user's wallet was not,
+        // so the category looked broken to anyone who tested it with their own
+        // card. It also meant excluding Payment Cards in Settings would not
+        // have kept a Verve number out of the history.
+        //
+        // 506099-506198, 507865-507964 and 650002-650027, at 16, 18 or 19
+        // digits.
+        let firstSix = Int(digits.prefix(6)) ?? 0
+        if (506099...506198).contains(firstSix)
+            || (507865...507964).contains(firstSix)
+            || (650002...650027).contains(firstSix) {
+            return [16, 18, 19].contains(length)
+        }
+        
+        // Discover. After Verve on purpose: Discover claims the whole of 65,
+        // which swallowed Verve's 650002-650027 range and rejected it for being
+        // 18 digits long before the Verve rule was ever reached.
         if digits.hasPrefix("6011") || digits.hasPrefix("65") || (644...649).contains(firstThree) {
             return [16, 19].contains(length)
         }
@@ -861,7 +881,7 @@ class ContentClassifier {
         if (3528...3589).contains(firstFour) {
             return (16...19).contains(length)
         }
-        
+
         return false
     }
     

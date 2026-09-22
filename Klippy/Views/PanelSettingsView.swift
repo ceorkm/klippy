@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 import ServiceManagement
 import Carbon.HIToolbox
 
@@ -8,6 +9,10 @@ struct PanelSettingsView: View {
 
     @ObservedObject private var skinStore = SkinStore.shared
     @ObservedObject private var shortcuts = ShortcutStore.shared
+    @ObservedObject private var exclusions = ExclusionStore.shared
+    @ObservedObject private var clipboard = ClipboardManager.shared
+    @State private var showingExclude = false
+    @ObservedObject private var panelController = PanelController.shared
 
     @State private var recording: ShortcutStore.Action?
     @State private var keyMonitor: Any?
@@ -24,8 +29,18 @@ struct PanelSettingsView: View {
     @AppStorage("klippy.ui.textSize") private var textSize: Double = 13.5
     // Off by default. This deletes data, so it only ever runs if asked for.
     @AppStorage(ClipboardManager.autoDeleteDaysKey) private var autoDeleteDays: Int = 0
+    @AppStorage(ClipboardManager.listLimitKey)
+    private var listLimit: Int = ClipboardManager.defaultListLimit
 
     var body: some View {
+        if showingExclude {
+            ExcludePicker { showingExclude = false }
+        } else {
+            settings
+        }
+    }
+
+    private var settings: some View {
         VStack(spacing: 0) {
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 18) {
@@ -34,7 +49,9 @@ struct PanelSettingsView: View {
                     section("Text size") { textSizeSegment }
                     section("General") { generalToggles }
                     section("Lock") { lockControls }
+                    section("Never record") { neverRecord }
                     section("Shortcuts") { shortcutTable }
+                    section("History size") { historySizeSegment }
                     section("Auto-delete") { autoDeleteControl }
                     section("Data") { dataActions }
                     privacyCard
@@ -89,6 +106,8 @@ struct PanelSettingsView: View {
                            count: skinStore.isWide ? 5 : 3),
             spacing: 10
         ) {
+            customSwatch
+
             ForEach(Skin.all) { option in
                 Button {
                     skinStore.select(option)
@@ -119,6 +138,94 @@ struct PanelSettingsView: View {
                 }
                 .buttonStyle(.plain)
             }
+        }
+    }
+
+    /// Your own picture, first in the grid so it is the obvious thing to try.
+    /// Tapping it with no picture set opens the picker; once one is set, tapping
+    /// selects it and the small cross clears it.
+    private var customSwatch: some View {
+        let isOn = skin.id == "custom"
+        return Button {
+            if skinStore.hasCustomImage { skinStore.select(skinStore.customSkin) }
+            else { pickCustomSkin() }
+        } label: {
+            VStack(spacing: 7) {
+                Group {
+                    if let image = skinStore.customImage {
+                        Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
+                    } else {
+                        ZStack {
+                            skin.chip
+                            Image(systemName: "photo.badge.plus")
+                                .font(.system(size: 17, weight: .light))
+                                .foregroundStyle(skin.mid)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 52)
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(isOn ? skin.accent : skin.border,
+                                      lineWidth: isOn ? 2 : 1)
+                )
+                .overlay(alignment: .topTrailing) {
+                    if skinStore.hasCustomImage {
+                        Button {
+                            skinStore.clearCustomImage()
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 8, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 16, height: 16)
+                                .background(Circle().fill(.black.opacity(0.55)))
+                        }
+                        .buttonStyle(.plain)
+                        .instantHelp("Remove your picture")
+                        .padding(4)
+                    }
+                }
+
+                Text(skinStore.customName ?? "Your image")
+                    .font(.system(size: 12))
+                    .lineLimit(1)
+                    .foregroundStyle(isOn ? skin.hi : skin.mid)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            if skinStore.hasCustomImage {
+                Button("Choose another picture…") { pickCustomSkin() }
+                Button("Remove", role: .destructive) { skinStore.clearCustomImage() }
+            }
+        }
+        .instantHelp("Use one of your own pictures")
+    }
+
+    /// Copies the picture into the app rather than remembering where it lives,
+    /// so the skin survives the original being moved or deleted and the sandbox
+    /// never needs access to that folder again.
+    private func pickCustomSkin() {
+        let picker = NSOpenPanel()
+        picker.canChooseFiles = true
+        picker.canChooseDirectories = false
+        picker.allowsMultipleSelection = false
+        picker.allowedContentTypes = [.png, .jpeg, .heic, .tiff, .webP, .image]
+        picker.prompt = "Use as background"
+        picker.message = "Pick a picture for the panel background"
+
+        guard PanelController.withModalSession({ picker.runModal() }) == .OK,
+              let url = picker.url else { return }
+
+        if !skinStore.setCustomImage(from: url) {
+            let alert = NSAlert()
+            alert.messageText = "That picture could not be read"
+            alert.informativeText = "Try a PNG, JPEG or HEIC."
+            PanelController.withModalSession { alert.runModal() }
         }
     }
 
@@ -302,7 +409,67 @@ struct PanelSettingsView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - Shortcuts
+    // MARK: - History size
+
+    /// How far History scrolls before you have to search. Nothing is deleted
+    /// by this: every clip stays in the store and stays searchable. All is a
+    /// real option, not a warning, because how much of your own history you
+    /// want in front of you is not Klippy's decision.
+    private var historySizeSegment: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 4) {
+                historySizeButton("200", limit: 200)
+                historySizeButton("1,000", limit: 1000)
+                historySizeButton("5,000", limit: 5000)
+                historySizeButton("All", limit: 0)
+            }
+            .padding(4)
+            .background(skin.card, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+
+            Text(listLimit == 0
+                 ? "Showing all \(ClipboardManager.shared.totalItemCount) clips. Nothing is hidden, the panel takes a moment longer to open."
+                 : "Older clips are still kept and still searchable, just not in the scroll.")
+                .font(.system(size: 11.5))
+                .foregroundStyle(skin.low)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func historySizeButton(_ title: String, limit: Int) -> some View {
+        segmentButton(title, isOn: listLimit == limit) {
+            listLimit = limit
+            ClipboardManager.shared.refreshHistory()
+        }
+    }
+
+    // MARK: - Never record
+
+    /// One button. The list lives behind it, not in the settings scroll: a
+    /// dozen app rows with switches turns a small panel into a form.
+    private var neverRecord: some View {
+        Button { showingExclude = true } label: {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Exclude")
+                        .font(.system(size: 14))
+                        .foregroundStyle(skin.hi)
+                    Text(exclusions.summary)
+                        .font(.system(size: 12))
+                        .foregroundStyle(skin.low)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(skin.low)
+            }
+            .padding(14)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(skin.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    // MARK: - Shortcuts    // MARK: - Shortcuts
 
     private var shortcutTable: some View {
         VStack(spacing: 0) {
@@ -317,10 +484,18 @@ struct PanelSettingsView: View {
 
     private func editableShortcutRow(_ action: ShortcutStore.Action, isLast: Bool) -> some View {
         let isRecording = recording == action
+        let taken = panelController.unavailableShortcuts.contains(action)
         return HStack(spacing: 10) {
-            Text(action.title)
-                .font(.system(size: 14))
-                .foregroundStyle(skin.hi)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(action.title)
+                    .font(.system(size: 14))
+                    .foregroundStyle(skin.hi)
+                if taken {
+                    Text("Another app is already using this")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.red)
+                }
+            }
             Spacer(minLength: 8)
 
             if shortcuts.binding(for: action) != action.fallback {
@@ -501,7 +676,11 @@ struct PanelSettingsView: View {
         panel.allowedContentTypes = []
         panel.prompt = "Import"
         panel.message = "Choose the DataModel.sqlite from your previous Klippy install"
-        panel.directoryURL = URL(fileURLWithPath: NSHomeDirectory())
+        // Not NSHomeDirectory(): inside the sandbox that is the container, so
+        // the picker opened on Klippy's own live store. The passwd entry is
+        // the real home, which is where the old install kept its database.
+        let home = getpwuid(getuid()).map { String(cString: $0.pointee.pw_dir) } ?? NSHomeDirectory()
+        panel.directoryURL = URL(fileURLWithPath: home)
             .appendingPathComponent("Library/Application Support/Klippy", isDirectory: true)
 
         guard PanelController.withModalSession({ panel.runModal() }) == .OK,

@@ -83,8 +83,37 @@ scratchpad/
 *.provisionprofile
 *.mobileprovision
 
-# Loose images dropped into the app folder. Real assets live in
+# Loose media dropped into the app folder. Real assets live in
 # Assets.xcassets, so anything else here is a stray from another project.
+# Screen recordings especially: one was sitting here at 811MB, untracked and
+# unignored, one `git add -A` away from a public repo.
 Klippy/*.png
 Klippy/*.jpg
 Klippy/*.jpeg
+Klippy/*.mp4
+Klippy/*.mov
+
+# Screen recordings and throwaway capture builds, anywhere in the tree.
+*.mp4
+*.mov
+.shots-build/
+# ...except the site's own demo, which is part of the site.
+!site/assets/*.mp4
+
+# Agent tooling. Installed per-machine, never part of the product.
+.claude/
+.agents/
+skills-lock.json
+
+# Remotion launch film: source is tracked, build output is not.
+klippy-launch/node_modules/
+klippy-launch/out/
+klippy-launch/.remotion/
+klippy-launch/dist/
+
+# Anything that looks like a credential, wherever it lands.
+*.p8
+*.pem
+*.key
+AuthKey_*
+.release.env

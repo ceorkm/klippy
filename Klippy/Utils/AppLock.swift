@@ -27,6 +27,9 @@ final class AppLock: ObservableObject {
     @Published private(set) var lastError: String?
 
     private var unlockedAt: Date?
+    /// True while a prompt is on screen. The panel asks on open and the
+    /// Unlock button asks again, and two prompts at once cancel each other.
+    private var unlocking = false
     private let defaults = UserDefaults.standard
 
     private init() {
@@ -90,6 +93,9 @@ final class AppLock: ObservableObject {
     }
 
     func unlock() async {
+        guard !unlocking else { return }
+        unlocking = true
+        defer { unlocking = false }
         lastError = nil
         let context = LAContext()
         context.localizedCancelTitle = "Cancel"

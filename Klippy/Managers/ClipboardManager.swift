@@ -54,14 +54,23 @@ class ClipboardManager: ObservableObject {
     
     // Performance optimization: Cache for recent items
     var itemCache: [ClipboardItemViewModel] = []
-    private let cacheSize = 1000
+    /// How many clips the History list holds, and so how far you can scroll
+    /// before you have to search. This is the user's call, not Klippy's: the
+    /// number used to be hardcoded at a thousand, so a history of twenty-five
+    /// thousand clips showed its true count in the header and then quietly
+    /// stopped scrolling at the first thousand.
+    static let listLimitKey = "klippy.data.listLimit"
+    static let defaultListLimit = 1000
+
+    var listLimit: Int {
+        UserDefaults.standard.object(forKey: Self.listLimitKey) as? Int ?? Self.defaultListLimit
+    }
+
+    /// 0 in the setting means "all of them". Fetch requests need a number, so
+    /// it becomes one no history will reach.
+    var listFetchLimit: Int { listLimit == 0 ? 1_000_000 : listLimit }
     
     // Duplicate detection
-    /// Content hashes seen this session. No longer used to block a capture:
-    /// that is what the short dedup window is for. Kept because deleting a clip
-    /// and clearing the history both maintain it, and the debug dump reads it.
-    var recentHashes: Set<String> = []
-    private let maxRecentHashes = 10000
     /// Change count of a write Klippy made itself. Copying a clip back out puts
     /// it on the pasteboard, which the monitor then sees as brand new content and
     /// stores a second time. Hash dedup does not catch it, because it only
@@ -281,7 +290,25 @@ class ClipboardManager: ObservableObject {
 
     /// How long the clipboard has to hold still before Klippy reads it. Longer
     /// than an app's own burst of writes, far shorter than two human copies.
-    private static let writeBurstWindow: TimeInterval = 0.2
+    ///
+    /// 0.5, and the number is measured rather than guessed. At 0.2 this still
+    /// let 26 clips through twice in a day. Every one of those pairs had the
+    /// same content and the same source, and the gap between them ran from
+    /// 0.196s to 0.399s, clustered on 0.29s:
+    ///
+    ///     Cursor     0.296  0.292  0.300  0.298  0.287
+    ///     macOS VM   0.385  0.373  0.391  0.296
+    ///
+    /// Nobody presses Command-C twice at 0.296 seconds twenty-six times in a
+    /// row. That is the app writing the pasteboard a second time, and at 0.2
+    /// the first read had already fired before the second write arrived, so
+    /// the second write scheduled a read of its own. 0.5 covers the widest
+    /// burst observed with a hundred milliseconds to spare.
+    ///
+    /// This still does NOT compare content. Copy the same thing ten times and
+    /// you get ten clips; the window only waits for the clipboard to stop
+    /// moving before reading it once.
+    private static let writeBurstWindow: TimeInterval = 0.5
     
     private func processClipboardContent(skippingIfAlreadyStored: Bool = false) {
         // Get the current clipboard content
@@ -1095,6 +1122,11 @@ class ClipboardManager: ObservableObject {
         // time that queue runs the frontmost app may well have changed.
         let source = currentSourceApp()
 
+        // Snapshot the exclusions here too, for the same reason. The store is
+        // an ObservableObject whose set is written on the main thread when the
+        // user ticks a box; reading it from the Core Data queue is a data race.
+        let excluded = ExclusionStore.shared.kinds
+
         await withCheckedContinuation { continuation in
             backgroundContext.perform { [weak self] in
                 guard let self = self else {
@@ -1104,6 +1136,14 @@ class ClipboardManager: ObservableObject {
                 
                 // Classify content
                 let category = categoryOverride ?? self.contentClassifier.classify(content)
+
+                // The user said never to keep this kind of thing. It has to be
+                // after classification, since the kind is what is being
+                // excluded, but before anything is written.
+                if excluded.contains(category.rawValue) {
+                    continuation.resume()
+                    return
+                }
 
                 // Create new clipboard item
                 let item = ClipboardItem.create(
@@ -1401,6 +1441,10 @@ class ClipboardManager: ObservableObject {
         // Same as above: the source has to be read here, on the main actor.
         let source = currentSourceApp()
 
+        // Images go through their own save path, so the exclusion has to be
+        // checked here too or ticking Pictures still lets screenshots through.
+        if ExclusionStore.shared.excludes(category: .image) { return }
+
         await withCheckedContinuation { continuation in
             backgroundContext.perform { [weak self] in
                 guard let self = self else {
@@ -1535,29 +1579,6 @@ class ClipboardManager: ObservableObject {
 
     static let remoteSourceName = "Another device"
 
-    // MARK: - Debug Methods
-
-    func debugCurrentState() {
-        print("=== Klippy Debug State ===")
-        print("Current change count: \(pasteboard.changeCount)")
-        print("Last tracked change count: \(lastChangeCount)")
-        print("Total items in history: \(totalItemCount)")
-        print("Recent items count: \(recentItems.count)")
-        print("Recent hashes count: \(recentHashes.count)")
-        print("Timer running: \(monitoringTimer != nil)")
-
-        // Check current clipboard content
-        let clipboardData = getClipboardContent()
-        if let imageData = clipboardData.imageData {
-            print("Current clipboard: Image (\(imageData.count) bytes)")
-        } else if let content = clipboardData.content {
-            print("Current clipboard: Text (\(content.count) chars)")
-        } else {
-            print("Current clipboard: Empty")
-        }
-        print("=== End Debug State ===")
-    }
-    
     // MARK: - Data Retrieval
     
     private func updateTotalItemCount() {
@@ -1583,14 +1604,17 @@ class ClipboardManager: ObservableObject {
     private func loadRecentItems() {
         let request: NSFetchRequest<ClipboardItem> = ClipboardItem.fetchRequest()
         request.sortDescriptors = [NSSortDescriptor(keyPath: \ClipboardItem.createdAt, ascending: false)]
-        request.fetchLimit = cacheSize
+        request.fetchLimit = listFetchLimit
         
+        let started = Date()
         backgroundContext.perform { [weak self] in
             guard let self = self else { return }
             
             do {
                 let items = try self.backgroundContext.fetch(request)
                 let viewModels = items.map { ClipboardItemViewModel(from: $0) }
+                let seconds = Date().timeIntervalSince(started)
+                print("Loaded \(viewModels.count) clips in \(String(format: "%.0f", seconds * 1000))ms")
                 
                 DispatchQueue.main.async {
                     self.itemCache = viewModels
@@ -1605,7 +1629,7 @@ class ClipboardManager: ObservableObject {
     private func addToRecentItems(_ item: ClipboardItemViewModel) {
         // Add to cache
         itemCache.insert(item, at: 0)
-        if itemCache.count > cacheSize {
+        if itemCache.count > listFetchLimit {
             itemCache.removeLast()
         }
         
@@ -1613,6 +1637,52 @@ class ClipboardManager: ObservableObject {
         recentItems.insert(item, at: 0)
         if recentItems.count > 50 {
             recentItems.removeLast()
+        }
+
+        // Tell the search cache the history moved.
+        //
+        // Only the completely unfiltered History reads this in-memory list.
+        // Every other view is served by SearchEngine, which caches its results
+        // for thirty seconds under a key containing `historyRevision`. Capture
+        // never touched that number, so with a search typed or a chip selected
+        // a clip you had just copied did not appear for up to half a minute.
+        // Copying something you already had was the worst case, because that
+        // is exactly when you go looking for it.
+        //
+        // Deliberately lighter than `markHistoryChanged`: this runs on every
+        // copy, so it bumps the number and the count rather than re-running the
+        // grouped queries behind the chips.
+        historyRevision &+= 1
+        totalItemCount += 1
+
+        // The chips still have to learn about this clip, though.
+        //
+        // A category chip only appears once that category exists in the
+        // history, and the same goes for an app in the filter. Leaving the
+        // grouped queries out entirely meant those sets were only ever rebuilt
+        // on a full refresh, so on a fresh install you could copy a number and
+        // watch nothing happen: the clip was stored and classified correctly,
+        // but "Numbers" never appeared and the panel looked broken. It is
+        // invisible on a library that already contains every category, which is
+        // why it survived here and showed up immediately on a clean machine.
+        //
+        // Adding the one new value is O(1), so the chips keep up without the
+        // queries coming back.
+        presentCategories.insert(item.category)
+
+        if let name = item.sourceApplication?.trimmingCharacters(in: .whitespaces),
+           !name.isEmpty {
+            if let at = presentSources.firstIndex(where: { $0.name == name }) {
+                let was = presentSources[at]
+                presentSources[at] = ClipSource(name: was.name,
+                                                bundleID: was.bundleID ?? item.sourceBundleIdentifier,
+                                                count: was.count + 1)
+            } else {
+                presentSources.append(ClipSource(name: name,
+                                                 bundleID: item.sourceBundleIdentifier,
+                                                 count: 1))
+            }
+            presentSources.sort { $0.count > $1.count }
         }
     }
     
@@ -1844,6 +1914,23 @@ class ClipboardManager: ObservableObject {
     }
     
     static let autoDeleteDaysKey = "klippy.data.autoDeleteDays"
+    private static let lastAutoDeleteKey = "klippy.data.lastAutoDelete"
+
+    /// Applies the retention setting, at most once a day.
+    ///
+    /// It used to run only in `applicationDidFinishLaunching`. Klippy is a menu
+    /// bar app that stays open for weeks at a time, so "delete clips older than
+    /// 30 days" quietly stopped happening after the launch it was switched on.
+    func runAutoDeleteIfDue() {
+        let days = UserDefaults.standard.integer(forKey: Self.autoDeleteDaysKey)
+        guard days > 0 else { return }
+
+        if let last = UserDefaults.standard.object(forKey: Self.lastAutoDeleteKey) as? Date,
+           Date().timeIntervalSince(last) < 24 * 60 * 60 { return }
+
+        UserDefaults.standard.set(Date(), forKey: Self.lastAutoDeleteKey)
+        pruneUnusedClips(olderThanDays: days)
+    }
 
     /// How many clips a given retention window would remove, without removing
     /// anything. Used to show the real number before the setting is switched on.
@@ -1950,10 +2037,10 @@ class ClipboardManager: ObservableObject {
                     self.totalItemCount = 0
                     self.recentItems.removeAll()
                     self.itemCache.removeAll()
-                    self.recentHashes.removeAll()
                     self.favoriteItemIDs.removeAll()
                     self.persistFavoriteIDs()
                     SecretStore.shared.forgetAll()
+                    self.markHistoryChanged()
                 }
             } catch {
                 print("Failed to clear all items: \(error)")
@@ -1972,21 +2059,17 @@ class ClipboardManager: ObservableObject {
             do {
                 guard let item = try self.backgroundContext.fetch(request).first else { return }
 
-                let existingHash = item.contentHash
                 self.backgroundContext.delete(item)
                 try self.backgroundContext.save()
 
                 DispatchQueue.main.async {
-                    if let existingHash {
-                        self.recentHashes.remove(existingHash)
-                    }
                     self.itemCache.removeAll { $0.id == itemId }
                     self.recentItems.removeAll { $0.id == itemId }
                     if self.favoriteItemIDs.remove(itemId) != nil {
                         self.persistFavoriteIDs()
                     }
                     SecretStore.shared.forget(itemId)
-                    self.updateTotalItemCount()
+                    self.markHistoryChanged()
                 }
             } catch {
                 print("Failed to delete clipboard item: \(error)")
@@ -2026,7 +2109,9 @@ class ClipboardManager: ObservableObject {
         if let item = newItem {
             DispatchQueue.main.async { [weak self] in
                 self?.addToRecentItems(item)
-                self?.updateTotalItemCount()
+                // Bumps the revision too, so the Merged list picks the new clip
+                // up instead of serving the cached set from before the merge.
+                self?.markHistoryChanged()
             }
         }
 
@@ -2042,6 +2127,15 @@ class ClipboardManager: ObservableObject {
     /// weeks, so older merged clips were simply invisible. Pinned had the same
     /// problem and is fetched directly for the same reason.
     func fetchAllMergedItems() -> [ClipboardItemViewModel] {
+        // Held between renders. The Merged and Pinned lists are computed inside
+        // the panel's `body`, which SwiftUI re-runs for every hover, keystroke
+        // and selection, and each run was blocking the main thread on a fresh
+        // Core Data fetch of the whole set. The revision tells us when the
+        // store actually changed, so nothing goes stale.
+        if let cached = mergedCache, cached.revision == setsRevision {
+            return cached.items
+        }
+
         var results: [ClipboardItemViewModel] = []
 
         backgroundContext.performAndWait {
@@ -2058,6 +2152,7 @@ class ClipboardManager: ObservableObject {
             }
         }
 
+        mergedCache = (setsRevision, results)
         return results
     }
 
@@ -2065,6 +2160,12 @@ class ClipboardManager: ObservableObject {
         guard !favoriteItemIDs.isEmpty else { return [] }
 
         let idsSnapshot = favoriteItemIDs
+        if let cached = pinnedCache,
+           cached.revision == setsRevision,
+           cached.ids == idsSnapshot {
+            return cached.items
+        }
+
         var results: [ClipboardItemViewModel] = []
 
         backgroundContext.performAndWait {
@@ -2081,8 +2182,22 @@ class ClipboardManager: ObservableObject {
             }
         }
 
+        pinnedCache = (setsRevision, idsSnapshot, results)
         return results
     }
+
+    private var mergedCache: (revision: Int, items: [ClipboardItemViewModel])?
+    private var pinnedCache: (revision: Int, ids: Set<UUID>, items: [ClipboardItemViewModel])?
+
+    /// Counts changes that can affect the Merged and Pinned lists, which an
+    /// ordinary copy cannot: a delete, a clear, or a merge.
+    ///
+    /// These two used to key on `historyRevision`. That was fine until capture
+    /// started bumping it on every copy, which would have thrown both caches
+    /// away each time and put the blocking fetch back on the next render of
+    /// those views. Copying text does not create a merged clip or pin one, so
+    /// it has no business invalidating either.
+    private var setsRevision: Int = 0
 
     @discardableResult
     func toggleFavorite(itemId: UUID) -> Bool {
@@ -2185,17 +2300,27 @@ class ClipboardManager: ObservableObject {
     
     func clearCache() {
         itemCache.removeAll()
-        recentHashes.removeAll()
     }
 
     func refreshHistory() {
+        markHistoryChanged()
+        loadRecentItems()
+    }
+
+    /// Everything `refreshHistory` does except re-reading the newest thousand
+    /// clips off disk. Deleting is the case that needs this: the in-memory list
+    /// is already patched by hand, but the search cache is keyed on
+    /// `historyRevision`, so without a bump a clip you just deleted stays on
+    /// screen for up to thirty seconds whenever a search or filter is on, and
+    /// the app and category chips keep offering filters that now match nothing.
+    private func markHistoryChanged() {
+        setsRevision &+= 1
         if Thread.isMainThread {
             historyRevision &+= 1
         } else {
             DispatchQueue.main.async { [weak self] in self?.historyRevision &+= 1 }
         }
         updateTotalItemCount()
-        loadRecentItems()
         updatePresentCategories()
         updatePresentSources()
     }

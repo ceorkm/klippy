@@ -9,7 +9,7 @@ import Carbon.HIToolbox
 /// display and the app looks like it has vanished. Owning the window means it
 /// always opens somewhere visible, and a global hotkey works even when the icon
 /// is hidden entirely.
-final class PanelController: NSObject, NSWindowDelegate {
+final class PanelController: NSObject, NSWindowDelegate, ObservableObject {
     static let shared = PanelController()
 
     private var statusItem: NSStatusItem?
@@ -114,12 +114,18 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     /// Runs `work` with the auto-hide guard raised, then puts focus back on the
     /// panel so it is still there when the dialog closes.
+    @discardableResult
     static func withModalSession<T>(_ work: () -> T) -> T {
         shared.modalDepth += 1
         defer { shared.endModalSession() }
         return work()
     }
 
+    /// Main actor on purpose. Without it, this hops to Swift's background pool
+    /// on the first await, and the `defer` then calls `makeKeyAndOrderFront`
+    /// from that thread: AppKit throws and the process aborts. That is what
+    /// closed the app the moment Touch ID was turned on.
+    @MainActor
     static func withModalSession<T>(_ work: () async throws -> T) async rethrows -> T {
         shared.modalDepth += 1
         defer { shared.endModalSession() }
@@ -127,6 +133,12 @@ final class PanelController: NSObject, NSWindowDelegate {
     }
 
     private func endModalSession() {
+        // Belt and braces for the crash above: whatever thread a caller ends
+        // up on, the window is only ever touched from the main one.
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { self.endModalSession() }
+            return
+        }
         modalDepth = max(0, modalDepth - 1)
         guard modalDepth == 0, let panel, panel.isVisible else { return }
         panel.makeKeyAndOrderFront(nil)
@@ -137,14 +149,16 @@ final class PanelController: NSObject, NSWindowDelegate {
     /// state instead of reopening on whatever screen was last left open.
     static let willShowNotification = Notification.Name("klippy.panel.willShow")
 
-    /// Posted when the panel goes away, so animated skins can stop decoding.
-    static let didHideNotification = Notification.Name("klippy.panel.didHide")
-
     func show() {
         let panel = panel ?? makePanel()
         self.panel = panel
 
         NotificationCenter.default.post(name: Self.willShowNotification, object: nil)
+
+        // The retention setting has to keep applying on a machine that never
+        // restarts. This is a no-op unless a day has passed and the user chose
+        // a window.
+        ClipboardManager.shared.runAutoDeleteIfDue()
 
         panel.setContentSize(panel.contentView?.fittingSize ?? NSSize(width: 430, height: 650))
         panel.setFrameTopLeftPoint(anchorPoint(for: panel))
@@ -155,7 +169,6 @@ final class PanelController: NSObject, NSWindowDelegate {
     func hide() {
         lastHiddenAt = Date()
         panel?.orderOut(nil)
-        NotificationCenter.default.post(name: Self.didHideNotification, object: nil)
     }
 
     /// Re-sizes an open panel, for the Compact / Wide switch. The size was only
@@ -235,10 +248,10 @@ final class PanelController: NSObject, NSWindowDelegate {
             if hotKeyID.id == PanelController.hotKeySignature {
                 DispatchQueue.main.async { PanelController.shared.toggle() }
             } else if hotKeyID.id == PanelController.sequentialHotKeySignature {
-                DispatchQueue.main.async { PanelController.shared.stepBackThroughHistory() }
+                Task { @MainActor in PanelController.shared.stepBackThroughHistory() }
             } else if hotKeyID.id >= PanelController.slotHotKeyBase {
                 let slot = Int(hotKeyID.id - PanelController.slotHotKeyBase)
-                DispatchQueue.main.async { PanelController.shared.recallSlot(slot) }
+                Task { @MainActor in PanelController.shared.recallSlot(slot) }
             }
             return noErr
         }, 1, &eventType, nil, nil)
@@ -247,21 +260,31 @@ final class PanelController: NSObject, NSWindowDelegate {
         registerSlotHotKeys()
     }
 
+    /// Shortcuts macOS refused to give Klippy, because something else already
+    /// holds them. Registration failing used to be silent: Settings showed the
+    /// keys you picked and pressing them did nothing at all.
+    @Published private(set) var unavailableShortcuts: Set<ShortcutStore.Action> = []
+
     /// Registers the two rebindable shortcuts from whatever the user has chosen.
     private func registerConfigurableHotKeys() {
         let store = ShortcutStore.shared
+        var refused: Set<ShortcutStore.Action> = []
 
         let open = store.binding(for: .openPanel)
         let openID = EventHotKeyID(signature: OSType(0x4B4C5059), id: Self.hotKeySignature)
-        RegisterEventHotKey(open.keyCode, open.carbonModifiers, openID,
-                            GetApplicationEventTarget(), 0, &hotKeyRef)
-        _ = openID
+        if RegisterEventHotKey(open.keyCode, open.carbonModifiers, openID,
+                               GetApplicationEventTarget(), 0, &hotKeyRef) != noErr {
+            refused.insert(.openPanel)
+        }
 
         let step = store.binding(for: .stepBack)
         let stepID = EventHotKeyID(signature: OSType(0x4B4C5059), id: Self.sequentialHotKeySignature)
-        RegisterEventHotKey(step.keyCode, step.carbonModifiers, stepID,
-                            GetApplicationEventTarget(), 0, &sequentialHotKeyRef)
-        _ = stepID
+        if RegisterEventHotKey(step.keyCode, step.carbonModifiers, stepID,
+                               GetApplicationEventTarget(), 0, &sequentialHotKeyRef) != noErr {
+            refused.insert(.stepBack)
+        }
+
+        unavailableShortcuts = refused
     }
 
     /// Called after a shortcut is reassigned so the new keys take effect at once.
@@ -276,7 +299,9 @@ final class PanelController: NSObject, NSWindowDelegate {
     /// Control-Command-Down walks back through history one clip per press.
     /// The position resets after a short pause, so the next run starts fresh
     /// rather than continuing from wherever the last one stopped.
+    @MainActor
     func stepBackThroughHistory() {
+        guard !blockedByLock() else { return }
         let items = ClipboardManager.shared.recentItems
         guard !items.isEmpty else { return }
 
@@ -322,10 +347,26 @@ final class PanelController: NSObject, NSWindowDelegate {
     /// apps rather than to assist someone: a clipboard manager doing exactly
     /// this was turned down twice under guideline 2.4.5. Copy is the whole job
     /// here; the user presses Command-V.
+    @MainActor
     func recallSlot(_ index: Int) {
+        guard !blockedByLock() else { return }
         let items = ClipboardManager.shared.recentItems
         guard index >= 0, index < items.count else { return }
         ClipboardManager.shared.copyToClipboard(items[index])
+    }
+
+    /// The lock covered the panel and nothing else. With Require Touch ID on,
+    /// Control-Command-1 still put the newest clip on the clipboard for anyone
+    /// at the keyboard, card numbers included, and Control-Command-Down walked
+    /// the whole recent list. Behind the lock a hotkey opens the panel instead,
+    /// which asks for the fingerprint.
+    @MainActor
+    private func blockedByLock() -> Bool {
+        guard AppLock.isEnabled else { return false }
+        AppLock.shared.refreshLockState()
+        guard AppLock.shared.isLocked else { return false }
+        show()
+        return true
     }
 
     private static let hotKeySignature: UInt32 = 1

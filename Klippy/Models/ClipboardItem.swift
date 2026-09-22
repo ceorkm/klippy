@@ -1,8 +1,6 @@
 import Foundation
 import CoreData
-import SwiftUI
-import ImageIO
-import UniformTypeIdentifiers
+import AppKit
 
 // MARK: - Content Category Enum
 enum ContentCategory: Int16, CaseIterable {
@@ -85,64 +83,6 @@ enum ContentCategory: Int16, CaseIterable {
         case .other: return "Other"
         }
     }
-    
-    var iconName: String {
-        switch self {
-        case .all: return "square.grid.2x2.fill"
-        case .text: return "text.justify.left"
-        case .url: return "link.circle"
-        case .email: return "at"
-        case .phone: return "phone.fill"
-        case .address: return "mappin.and.ellipse"
-        case .code: return "chevron.left.forwardslash.chevron.right"
-        case .image: return "photo.on.rectangle"
-        case .file: return "doc.text.fill"
-        case .number: return "number.square"
-        case .date: return "calendar"
-        case .color: return "paintpalette.fill"
-        case .json: return "curlybraces"
-        case .xml: return "chevron.left.forwardslash.chevron.right"
-        case .markdown: return "textformat"
-        case .socialMedia: return "bubble.left.and.bubble.right.fill"
-        case .instagramURL: return "camera.circle"
-        case .tiktokURL: return "music.note"
-        case .apiKey: return "key.fill"
-        case .paymentCard: return "creditcard.fill"
-        case .ipAddress: return "network"
-        case .identifier: return "barcode"
-        case .merged: return "link.circle.fill"
-        case .other: return "questionmark.circle"
-        }
-    }
-    
-    var color: Color {
-        switch self {
-        case .all: return .primary
-        case .text: return .orange
-        case .url: return .purple
-        case .email: return .green
-        case .phone: return .orange
-        case .address: return .red
-        case .code: return .mint
-        case .image: return .pink
-        case .file: return .brown
-        case .number: return .orange
-        case .date: return .indigo
-        case .color: return .yellow
-        case .json: return .orange
-        case .xml: return .gray
-        case .markdown: return .orange
-        case .socialMedia: return .indigo
-        case .instagramURL: return .pink
-        case .tiktokURL: return .red
-        case .apiKey: return .mint
-        case .paymentCard: return .green
-        case .ipAddress: return .teal
-        case .identifier: return .cyan
-        case .merged: return .orange
-        case .other: return .secondary
-        }
-    }
 }
 
 // MARK: - Core Data Model
@@ -180,15 +120,6 @@ extension ClipboardItem {
         }
         set {
             contentType = newValue.rawValue
-        }
-    }
-    
-    var tagsArray: [String] {
-        get {
-            tags?.components(separatedBy: ",").compactMap { $0.trimmingCharacters(in: .whitespaces) } ?? []
-        }
-        set {
-            tags = newValue.joined(separator: ",")
         }
     }
     
@@ -288,8 +219,6 @@ struct ClipboardFileReference {
 
 // MARK: - View Model
 struct ClipboardItemViewModel: Identifiable {
-    private static let filePreviewCache = NSCache<NSString, NSImage>()
-
     let id: UUID
     let content: String
     let category: ContentCategory
@@ -464,51 +393,24 @@ struct ClipboardItemViewModel: Identifiable {
         return "\(names[0]) +\(names.count - 1) more"
     }
 
-    var listPreviewImage: NSImage? {
-        if let image = nsImage {
-            return image
-        }
-
-        guard isImageFileReference, let reference = primaryFileReference else { return nil }
-        let resolvedURL = resolveFileReferenceURL(reference)
-        let cacheKey = resolvedURL.path as NSString
-
-        if let cachedImage = Self.filePreviewCache.object(forKey: cacheKey) {
-            return cachedImage
-        }
-
-        let image = withSecurityScopedAccess(to: resolvedURL) {
-            loadImage(from: resolvedURL)
-        }
-        if let image {
-            Self.filePreviewCache.setObject(image, forKey: cacheKey)
-        }
-
-        return image
-    }
-
-    var hasImagePreview: Bool {
-        listPreviewImage != nil
-    }
-
-    var isImageFileReference: Bool {
-        guard category == .file, let reference = primaryFileReference else { return false }
-
-        let resolvedURL = resolveFileReferenceURL(reference)
-        let pathExtension = resolvedURL.pathExtension.lowercased()
-        guard !pathExtension.isEmpty else { return false }
-
-        guard let type = UTType(filenameExtension: pathExtension) else {
-            return false
-        }
-
-        return type.conforms(to: .image)
-    }
     
-    var relativeTimeString: String {
+    /// One formatter, not one per card per render. This is read from inside a
+    /// view body, so a scrolling list built a fresh formatter for every visible
+    /// row on every pass.
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: createdAt, relativeTo: Date())
+        return formatter
+    }()
+
+    var relativeTimeString: String {
+        // A clip captured a second ago used to read "in 0s". `createdAt` is
+        // stamped before the row is written, so by the time the card draws the
+        // date can still be a hair in the future, and the formatter reports
+        // that faithfully. Clamp to the past and name the first second.
+        let seconds = Date().timeIntervalSince(createdAt)
+        guard seconds >= 1 else { return "now" }
+        return Self.relativeFormatter.localizedString(fromTimeInterval: -seconds)
     }
 
     // Image-related computed properties
@@ -543,84 +445,6 @@ struct ClipboardItemViewModel: Identifiable {
         return "\(imageWidth)×\(imageHeight)"
     }
 
-    /// Same reasoning as `nsImage`, and worse: this one redraws through
-    /// lockFocus every time it is asked.
-    private static let thumbnails: NSCache<NSUUID, NSImage> = {
-        let cache = NSCache<NSUUID, NSImage>()
-        cache.countLimit = 300
-        return cache
-    }()
-
-    var thumbnailImage: NSImage? {
-        let key = id as NSUUID
-        if let cached = Self.thumbnails.object(forKey: key) { return cached }
-        guard let image = nsImage else { return nil }
-
-        let thumbnailSize = NSSize(width: 64, height: 64)
-        let thumbnail = NSImage(size: thumbnailSize)
-
-        thumbnail.lockFocus()
-        image.draw(in: NSRect(origin: .zero, size: thumbnailSize),
-                  from: NSRect(origin: .zero, size: image.size),
-                  operation: .sourceOver,
-                  fraction: 1.0)
-        thumbnail.unlockFocus()
-
-        Self.thumbnails.setObject(thumbnail, forKey: key)
-        return thumbnail
-    }
-
-    private var primaryFileReference: ClipboardFileReference? {
-        guard fileReferences.count == 1 else { return nil }
-        return fileReferences.first
-    }
-
-    private func resolveFileReferenceURL(_ reference: ClipboardFileReference) -> URL {
-        guard let bookmarkData = reference.bookmarkData else {
-            return reference.url
-        }
-
-        var isStale = false
-        if let resolvedURL = try? URL(
-            resolvingBookmarkData: bookmarkData,
-            options: [.withoutUI, .withSecurityScope],
-            relativeTo: nil,
-            bookmarkDataIsStale: &isStale
-        ) {
-            return resolvedURL
-        }
-
-        return reference.url
-    }
-
-    private func withSecurityScopedAccess<T>(to url: URL, _ work: () -> T?) -> T? {
-        let hasScopedAccess = url.startAccessingSecurityScopedResource()
-        defer {
-            if hasScopedAccess {
-                url.stopAccessingSecurityScopedResource()
-            }
-        }
-        return work()
-    }
-
-    private func loadImage(from url: URL) -> NSImage? {
-        if let image = NSImage(contentsOf: url) {
-            return image
-        }
-
-        if let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-           let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) {
-            return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
-        }
-
-        if let data = try? Data(contentsOf: url),
-           let source = CGImageSourceCreateWithData(data as CFData, nil),
-           let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) {
-            return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
-        }
-
-        return nil
-    }
 }
 
 // MARK: - String Extensions

@@ -1,35 +1,25 @@
 import Foundation
 import CoreData
-import Combine
 
 class SearchEngine: ObservableObject {
 
     // MARK: - Search Configuration
     private struct SearchConfig {
-        // Ceiling on matches considered/returned. Kept high so searches surface
-        // old matches across the whole history, not just the most recent few.
-        // The results list is virtualized, so large counts render lazily.
-        static let maxResults = 5000
+        // Ceiling on matches considered and returned. Follows the same
+        // setting as the History list, so one choice covers both and nothing
+        // is capped behind the user's back. The results list is virtualized,
+        // so large counts still render lazily.
+        static var maxResults: Int { ClipboardManager.shared.listFetchLimit }
         static let cacheTimeout: TimeInterval = 30
         static let minQueryLength = 1
-        static let debounceDelay: TimeInterval = 0.15
         static let broadFetchMultiplier = 3
-        static let fuzzyFetchMultiplier = 6
         static let fuzzyMinTokenLength = 4
         static let fuzzyMaxDistance = 2
-        static let fuzzyMinPrimaryResults = 20
     }
 
     // MARK: - Properties
     private let backgroundContext: NSManagedObjectContext
     private var searchCache: [String: CachedSearchResult] = [:]
-    private var searchSubject = PassthroughSubject<SearchQuery, Never>()
-    private var cancellables = Set<AnyCancellable>()
-    private var currentSearchID: UUID?
-
-    @Published var isSearching = false
-    @Published var searchResults: [ClipboardItemViewModel] = []
-    @Published var searchStats: SearchStats = SearchStats()
 
     // MARK: - Search Query Structure
     struct DateRange: Hashable {
@@ -68,17 +58,6 @@ class SearchEngine: ObservableObject {
     init() {
         self.backgroundContext = PersistenceController.shared.container.newBackgroundContext()
         self.backgroundContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
-
-        setupSearchDebouncing()
-    }
-
-    private func setupSearchDebouncing() {
-        searchSubject
-            .debounce(for: .seconds(SearchConfig.debounceDelay), scheduler: DispatchQueue.main)
-            .sink { [weak self] query in
-                self?.performSearch(query)
-            }
-            .store(in: &cancellables)
     }
 
     // MARK: - Public Search Interface
@@ -129,6 +108,10 @@ class SearchEngine: ObservableObject {
             cacheHit: false
         )
 
+        // Deliberately not published. `search()` is called from the panel's
+        // `body`, and assigning an `@Published` there mutates state the same
+        // view is already rendering: SwiftUI calls that undefined behaviour and
+        // it cost a second full render on every keystroke.
         searchCache[cacheKey] = CachedSearchResult(
             results: results,
             timestamp: Date(),
@@ -136,72 +119,10 @@ class SearchEngine: ObservableObject {
         )
         cleanExpiredCache()
 
-        searchResults = results
-        searchStats = stats
-
         return results
     }
 
-    func updateSearchQuery(_ query: String) {
-        let searchQuery = SearchQuery(
-            text: query,
-            category: .all,
-            dateRange: nil,
-            limit: 100
-        )
-        searchSubject.send(searchQuery)
-    }
-
     // MARK: - Core Search Implementation
-
-    private func performSearch(_ query: SearchQuery) {
-        let searchID = UUID()
-        currentSearchID = searchID
-        let startTime = Date()
-        isSearching = true
-
-        backgroundContext.perform { [weak self] in
-            guard let self = self else { return }
-            // Bail if a newer search was requested
-            guard self.currentSearchID == searchID else { return }
-
-            do {
-                let results = try self.executeSearch(query)
-                let searchTime = Date().timeIntervalSince(startTime)
-
-                // Bail if superseded
-                guard self.currentSearchID == searchID else { return }
-
-                let stats = SearchStats(
-                    totalMatches: results.count,
-                    searchTime: searchTime,
-                    cacheHit: false
-                )
-
-                // Cache results
-                let cacheKey = self.generateCacheKey(for: query)
-                self.searchCache[cacheKey] = CachedSearchResult(
-                    results: results,
-                    timestamp: Date(),
-                    stats: stats
-                )
-
-                self.cleanExpiredCache()
-
-                DispatchQueue.main.async {
-                    self.searchResults = results
-                    self.searchStats = stats
-                    self.isSearching = false
-                }
-
-            } catch {
-                print("Search error: \(error)")
-                DispatchQueue.main.async {
-                    self.isSearching = false
-                }
-            }
-        }
-    }
 
     private func executeSearch(_ query: SearchQuery) throws -> [ClipboardItemViewModel] {
         let request: NSFetchRequest<ClipboardItem> = ClipboardItem.fetchRequest()
@@ -419,63 +340,6 @@ class SearchEngine: ObservableObject {
         score += Int(secondsSinceMidnight / 100)
 
         return score
-    }
-
-    private func fetchFuzzyCandidates(
-        for query: SearchQuery,
-        excludingIDs: Set<UUID>
-    ) throws -> [ClipboardItemViewModel] {
-        guard let fuzzyTextPredicate = buildFuzzyFallbackPredicate(for: query.text) else {
-            return []
-        }
-
-        let request: NSFetchRequest<ClipboardItem> = ClipboardItem.fetchRequest()
-        request.returnsObjectsAsFaults = false
-        var predicates: [NSPredicate] = [fuzzyTextPredicate]
-
-        if query.category != .all {
-            predicates.append(Self.categoryPredicate(query.category))
-        }
-
-        if let dateRange = query.dateRange {
-            predicates.append(
-                NSPredicate(
-                    format: "createdAt >= %@ AND createdAt < %@",
-                    dateRange.start as NSDate,
-                    dateRange.end as NSDate
-                )
-            )
-        }
-
-        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: predicates)
-        request.sortDescriptors = [
-            NSSortDescriptor(keyPath: \ClipboardItem.createdAt, ascending: false)
-        ]
-        request.fetchLimit = min(
-            SearchConfig.maxResults,
-            query.limit * SearchConfig.fuzzyFetchMultiplier
-        )
-
-        let fetched = try backgroundContext.fetch(request).map { ClipboardItemViewModel(from: $0) }
-        return fetched.filter { !excludingIDs.contains($0.id) }
-    }
-
-    private func buildFuzzyFallbackPredicate(for text: String) -> NSPredicate? {
-        let tokens = normalizedSearchTokens(from: text)
-            .filter { $0.count >= SearchConfig.fuzzyMinTokenLength }
-
-        guard !tokens.isEmpty else { return nil }
-
-        let fuzzyPredicates = tokens.prefix(2).map { token -> NSPredicate in
-            let interleaved = "%" + token.map { String($0) }.joined(separator: "%") + "%"
-            return NSPredicate(
-                format: "(searchableContent LIKE[cd] %@) OR (content LIKE[cd] %@)",
-                interleaved,
-                interleaved
-            )
-        }
-
-        return NSCompoundPredicate(orPredicateWithSubpredicates: fuzzyPredicates)
     }
 
     private func normalizeForFuzzy(_ text: String) -> String {

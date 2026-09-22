@@ -51,10 +51,6 @@ class SnippetManager: ObservableObject {
         loadSnippets()
     }
 
-    func saveFromClipboardItem(_ item: ClipboardItemViewModel, title: String) {
-        createSnippet(title: title, content: item.content)
-    }
-
     func updateSnippet(id: UUID, title: String, content: String) {
         let context = backgroundContext
         context.performAndWait {
@@ -93,18 +89,4 @@ class SnippetManager: ObservableObject {
         loadSnippets()
     }
 
-    func copySnippetToClipboard(_ snippet: SavedSnippetViewModel) {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(snippet.content, forType: .string)
-    }
-
-    func filteredSnippets(query: String) -> [SavedSnippetViewModel] {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !trimmed.isEmpty else { return snippets }
-        return snippets.filter {
-            $0.title.lowercased().contains(trimmed) ||
-            $0.content.lowercased().contains(trimmed)
-        }
-    }
 }

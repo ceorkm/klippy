@@ -48,7 +48,7 @@ actor LinkPreviewStore {
 
     /// Cached image if we have one, otherwise fetches it once.
     func image(for url: URL) async -> NSImage? {
-        guard Self.isEnabled else { return nil }
+        guard Self.isEnabled, Self.isSafeToLoad(url) else { return nil }
 
         let key = Self.key(for: url)
         if let cached = memory[key] { return cached }
@@ -67,6 +67,9 @@ actor LinkPreviewStore {
         let image = await task.value.image
         running[key] = nil
 
+        // The setting can change while the fetch is in flight.
+        guard Self.isEnabled else { return nil }
+
         if let image {
             memory[key] = image
             writeToDisk(image, key: key)
@@ -74,6 +77,76 @@ actor LinkPreviewStore {
             failed.insert(key)
         }
         return image
+    }
+
+    /// A preview means actually loading the page, and some links act the
+    /// moment they are opened: a password reset, a magic sign-in, an
+    /// unsubscribe. Those are single-use, so fetching one to draw a thumbnail
+    /// burns it before the user ever pastes it.
+    ///
+    /// This looks for the shape of such a link, not for a query string. The
+    /// first version refused anything with a "?" or a "#" in it, which is most
+    /// of the web: a YouTube video, a Google search, a Hacker News item and an
+    /// Amazon product all carry a query, and all of them lost their preview.
+    /// Half of a sample of twelve everyday links was blocked. What actually
+    /// marks a single-use link is an account-action word in the path, a
+    /// credential named in the query or fragment, or one long unbroken token
+    /// in the path. The icon fetch is unaffected: it only asks the site root.
+    nonisolated static func isSafeToLoad(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
+            return false
+        }
+
+        let segments = url.pathComponents.filter { $0 != "/" }
+        if segments.contains(where: { accountActionWords.contains($0.lowercased()) }) { return false }
+        if segments.contains(where: isOpaqueToken) { return false }
+
+        // OAuth returns an access token after the hash rather than in the query,
+        // so the fragment is read the same way.
+        if let query = url.query, carriesCredential(query) { return false }
+        if let fragment = url.fragment, carriesCredential(fragment) { return false }
+
+        return true
+    }
+
+    /// Path words that mean "this link does something the moment it loads".
+    private static let accountActionWords: Set<String> = [
+        "reset", "forgot", "verify", "verification", "confirm", "confirmation",
+        "activate", "activation", "invite", "invitation", "magic", "magiclink",
+        "login", "signin", "sign-in", "logout", "signout", "auth", "oauth",
+        "oauth2", "sso", "token", "session", "password", "otp", "one-time",
+        "unsubscribe", "optout", "opt-out"
+    ]
+
+    /// Parameter names that carry a secret. The value is never inspected: the
+    /// name alone is enough, and reading values would mean logging them.
+    private static let credentialKeys: Set<String> = [
+        "token", "access_token", "id_token", "refresh_token", "oauth_token",
+        "auth", "authorization", "code", "key", "api_key", "apikey", "secret",
+        "password", "passwd", "pwd", "session", "sessionid", "sid", "otp",
+        "pin", "magic", "invite", "invitation", "reset", "confirm", "verify",
+        "signature", "sig", "jwt", "credential", "ticket", "nonce", "unsubscribe"
+    ]
+
+    private static func carriesCredential(_ text: String) -> Bool {
+        text.split(whereSeparator: { $0 == "&" || $0 == ";" }).contains { pair in
+            let name = pair.split(separator: "=", maxSplits: 1).first.map(String.init) ?? ""
+            return credentialKeys.contains(name.lowercased())
+        }
+    }
+
+    /// One long unbroken token, which is what a magic link's path looks like.
+    ///
+    /// Length alone would catch ordinary content: a blog slug runs well past
+    /// thirty characters. Slugs are hyphenated words, tokens are not, so the
+    /// separator is what tells them apart. A bare identifier like a Spotify
+    /// track (22 characters) stays under the bar and keeps its preview.
+    private static func isOpaqueToken(_ segment: String) -> Bool {
+        if segment.count == 36, UUID(uuidString: segment) != nil { return true }
+        guard segment.count >= 32,
+              !segment.contains("-"), !segment.contains("_"),
+              segment.allSatisfy({ $0.isLetter || $0.isNumber }) else { return false }
+        return segment.contains(where: \.isNumber) && segment.contains(where: \.isLetter)
     }
 
     /// The site's own icon, keyed by host so every page on a domain shares one
@@ -224,6 +297,10 @@ actor LinkPreviewStore {
 
     /// Drops every cached preview. Used when the setting is switched off.
     func clearCache() {
+        for task in running.values { task.cancel() }
+        for task in iconTasks.values { task.cancel() }
+        running.removeAll()
+        iconTasks.removeAll()
         memory.removeAll()
         failed.removeAll()
         icons.removeAll()

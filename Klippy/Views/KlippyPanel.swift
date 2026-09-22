@@ -158,7 +158,21 @@ struct KlippyPanel: View {
 
     @ViewBuilder
     private var background: some View {
-        if let image = skin.image {
+        if skin.isCustom, let custom = skinStore.customImage {
+            ZStack {
+                Image(nsImage: custom)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: skinStore.panelWidth, height: 650)
+                    .clipped()
+                LinearGradient(
+                    colors: [Color(hex: 0x080C08).opacity(skin.scrimTop),
+                             Color(hex: 0x080C08).opacity(skin.scrimBottom)],
+                    startPoint: .top, endPoint: .bottom
+                )
+            }
+            .frame(width: skinStore.panelWidth, height: 650)
+        } else if let image = skin.image {
             ZStack {
                 // Explicit frame: an image inside .background() with only an
                 // aspectRatio keeps its natural size and never fills the panel.
@@ -250,7 +264,10 @@ struct KlippyPanel: View {
             }
         }
         .padding(.horizontal, 18)
-        .padding(.top, 18)
+        // 24 rather than 18: the hover labels sit above these icons and the
+        // panel clips anything that reaches past its own rounded edge, so the
+        // row needs the height of a label above it.
+        .padding(.top, 24)
     }
 
     /// `help` is not decoration. These are four unlabelled circles and there is
@@ -269,8 +286,7 @@ struct KlippyPanel: View {
                 )
         }
         .buttonStyle(.plain)
-        .help(help)
-        .accessibilityLabel(help)
+        .instantHelp(help)
     }
 
     private func toggle(_ view: PanelView) {
@@ -415,7 +431,27 @@ struct KlippyPanel: View {
                     searchDebounce = work
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
                 }
+
+            // Clearing a search by holding down delete is a chore, and the old
+            // panel had this button before the rebuild dropped it.
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                    appliedSearch = ""
+                    searchDebounce?.cancel()
+                    searchFocused = true
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(skin.low)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .instantHelp("Clear")
+                .transition(.opacity)
+            }
         }
+        .animation(.easeOut(duration: 0.12), value: searchText.isEmpty)
         .padding(.horizontal, 13)
         .frame(height: 40)
         .background(skin.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -455,7 +491,7 @@ struct KlippyPanel: View {
                     .foregroundStyle(sourceFilter == nil && !showingSourcePicker ? skin.mid : skin.hi)
                 }
                 .buttonStyle(.plain)
-                .help("Show only clips copied from one app")
+                .instantHelp("Only clips from one app")
             }
 
             Button {
@@ -471,7 +507,7 @@ struct KlippyPanel: View {
                 .foregroundStyle(dateFilter == .allTime && !showingDatePicker ? skin.mid : skin.hi)
             }
             .buttonStyle(.plain)
-            .help("Filter by when a clip was copied")
+            .instantHelp("Filter by when you copied it")
         }
         .padding(.horizontal, 18)
         .padding(.top, 12)
@@ -867,7 +903,7 @@ struct KlippyPanel: View {
                 .background(skin.chip, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)
-        .help(help ?? title)
+        .instantHelp(help ?? title, edge: .top)
     }
 
     // MARK: - Drag out
@@ -875,19 +911,28 @@ struct KlippyPanel: View {
     /// Lets a clip be dragged straight into another app. Images go as images,
     /// file clips as their file URLs, everything else as plain text.
     private func dragProvider(for item: ClipboardItemViewModel) -> NSItemProvider {
+        let provider: NSItemProvider
         if let image = item.nsImage {
             // A file, not raw image data. Editors and terminals ignore the
             // latter, which is why dragging a picture used to do nothing.
-            return DragExport.provider(for: item.id, image: image, createdAt: item.createdAt)
+            provider = DragExport.provider(for: item.id, image: image, createdAt: item.createdAt)
+        } else if item.category == .file, let first = item.fileReferences.first,
+                  let file = NSItemProvider(contentsOf: first.url) {
+            provider = file
+        } else {
+            provider = NSItemProvider(object: item.content as NSString)
         }
-
-        let files = item.category == .file ? item.fileReferences : []
-        if let first = files.first {
-            return NSItemProvider(contentsOf: first.url) ?? NSItemProvider(object: item.content as NSString)
+        // Tags the drag as ours. Letting go of a card over the list is a drop
+        // like any other, and it used to come back as a brand new clip.
+        provider.registerDataRepresentation(forTypeIdentifier: Self.ownDragType,
+                                            visibility: .ownProcess) { done in
+            done(Data(), nil)
+            return nil
         }
-
-        return NSItemProvider(object: item.content as NSString)
+        return provider
     }
+
+    private static let ownDragType = "com.klippy.own-drag"
 
     // MARK: - Drop
 
@@ -896,6 +941,10 @@ struct KlippyPanel: View {
     /// Dropped content is written to the pasteboard and picked up by the normal
     /// capture path, so a dragged item behaves exactly like something copied.
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        // One of our own cards, dragged and let go over the list.
+        if providers.contains(where: { $0.hasItemConformingToTypeIdentifier(Self.ownDragType) }) {
+            return false
+        }
         var handled = false
         let group = DispatchGroup()
         let queue = DispatchQueue(label: "klippy.drop.files")
@@ -1258,9 +1307,17 @@ struct KlippyPanel: View {
             return
         }
 
-        let components = chosen.flatMap { item -> [String] in
-            item.isMergedClip ? item.mergedComponents : [item.content]
+        let pictures = chosen.filter(\.isImage).count
+        let components = Self.mergeComponents(from: chosen)
+
+        // Nothing left to join once the pictures are set aside.
+        guard components.count >= 2 else {
+            showToast(pictures > 0 ? "Pictures can't be merged"
+                                   : "Merge needs at least two clips",
+                      symbol: "exclamationmark.triangle")
+            return
         }
+
         guard let merged = clipboardManager.createMergedClip(components: components) else {
             showToast("Merge needs at least two clips", symbol: "exclamationmark.triangle")
             return
@@ -1275,7 +1332,30 @@ struct KlippyPanel: View {
         panelView = .merged
         selection = []
         FeedbackManager.playMerge()
-        showToast("Merged \(chosen.count) clips", symbol: "arrow.triangle.merge")
+        showToast(mergeSummary(parts: components.count, skipped: pictures),
+                  symbol: "arrow.triangle.merge")
+    }
+
+    private func mergeSummary(parts: Int, skipped: Int) -> String {
+        guard skipped > 0 else { return "Merged \(parts) clips" }
+        return "Merged \(parts), skipped \(skipped == 1 ? "1 picture" : "\(skipped) pictures")"
+    }
+
+    /// The text a merge is actually built from.
+    ///
+    /// Every clip used to contribute its raw `content`, which is only the right
+    /// thing for text. A picture's content is the label "Image (764x1024)", so
+    /// merging two photographs produced a clip holding two descriptions and no
+    /// pictures at all. A file clip's content is the encoded bundle, so merging
+    /// one pasted a line of base64. Pictures are left out, files contribute
+    /// their paths, and a merged clip contributes its own parts.
+    static func mergeComponents(from items: [ClipboardItemViewModel]) -> [String] {
+        items.flatMap { item -> [String] in
+            if item.isImage { return [] }
+            if item.isMergedClip { return item.mergedComponents }
+            if item.isFileReference { return item.fileURLs.map(\.path) }
+            return [item.content]
+        }
     }
 
     // MARK: - Data
@@ -1306,7 +1386,7 @@ struct KlippyPanel: View {
             query: appliedSearch,
             category: category,
             dateRange: range,
-            limit: 5000,
+            limit: clipboardManager.listFetchLimit,
             source: sourceFilter
         )
 
@@ -1478,8 +1558,7 @@ private struct ClipRow<Card: View>: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .help("Delete this clip")
-                    .accessibilityLabel("Delete this clip")
+                    .instantHelp("Delete this clip", edge: .top)
                     .onHover { isHoveringDelete = $0 }
                     .padding(.trailing, 10)
                     .padding(.bottom, 8)

@@ -36,6 +36,86 @@ final class KlippyTests: XCTestCase {
     /// This used to be a hand-written NSManagedObjectModel. It silently drifted
     /// from DataModel.xcdatamodeld, so tests failed on attributes the real app
     /// has had for months. Loading the shipped model means it cannot drift.
+    // MARK: - Regressions found 2026-09-17
+
+    /// Merging used to take every clip's raw content. A picture's content is
+    /// its label, so two photographs merged into two lines of text and no
+    /// pictures; a file clip's content is the encoded bundle, so merging one
+    /// pasted base64.
+    func testMergeLeavesPicturesOutAndUsesFilePaths() {
+        let first = ClipboardItemViewModel(content: "first line", category: .text)
+        let second = ClipboardItemViewModel(content: "second line", category: .text)
+        let picture = ClipboardItemViewModel(content: "Image (764x1024)",
+                                             category: .image, isImage: true,
+                                             imageWidth: 764, imageHeight: 1024)
+        let json = #"{"version":2,"entries":[{"url":"file:///Users/example/report.pdf"}]}"#
+        let bundle = "klippy-file-bundle-v2:" + Data(json.utf8).base64EncodedString()
+        let fileClip = ClipboardItemViewModel(content: bundle, category: .file)
+
+        let parts = KlippyPanel.mergeComponents(from: [first, picture, second, fileClip])
+
+        XCTAssertEqual(parts, ["first line", "second line", "/Users/example/report.pdf"])
+        XCTAssertFalse(parts.contains { $0.hasPrefix("klippy-file-bundle") },
+                       "the encoded bundle must never become merged text")
+    }
+
+    /// Selecting two pictures and pressing Merge has nothing to join, so the
+    /// panel must say so rather than build a clip of their labels.
+    func testMergingOnlyPicturesHasNothingToJoin() {
+        let one = ClipboardItemViewModel(content: "Image (10x10)", category: .image, isImage: true)
+        let two = ClipboardItemViewModel(content: "Image (20x20)", category: .image, isImage: true)
+        XCTAssertTrue(KlippyPanel.mergeComponents(from: [one, two]).isEmpty)
+    }
+
+    // MARK: - Regressions found 2026-09-17
+
+    /// Previews used to load every copied URL, which consumes one-time links.
+    /// The first fix over-corrected and refused anything with a query, which
+    /// silently killed previews for YouTube, Google, Amazon and Hacker News.
+    func testLinkPreviewsRefuseTokenBearingURLs() {
+        let safe = [
+            "https://example.com/blog/post",
+            "http://github.com/ceorkm/klippy",
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "https://news.ycombinator.com/item?id=41234567",
+            "https://www.google.com/search?q=swift+actor",
+            "https://developer.apple.com/documentation/swiftui/view#overview",
+            "https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT"
+        ]
+        let unsafe = [
+            "https://x.com/reset?token=abc",
+            "https://x.com/login/aB3dE5fG7hI9jK1lM3nO5pQ7",
+            "https://app.example.com/#access_token=abc123",
+            "https://example.com/unsubscribe?u=99&id=12",
+            "https://mail.example.com/verify/a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
+            "https://example.com/callback?code=4AX4XfWh",
+            "ftp://x.com/a"
+        ]
+        for value in safe {
+            XCTAssertTrue(LinkPreviewStore.isSafeToLoad(URL(string: value)!), value)
+        }
+        for value in unsafe {
+            XCTAssertFalse(LinkPreviewStore.isSafeToLoad(URL(string: value)!), value)
+        }
+    }
+
+    /// Transient and auto-generated writes are never the user copying
+    /// something, so they are skipped whatever the password-manager toggle says.
+    func testTransientPasteboardIsSkippedEvenWithConcealedToggleOff() {
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: ClipboardPrivacy.ignoreConcealedKey)
+        defaults.set(false, forKey: ClipboardPrivacy.ignoreConcealedKey)
+        defer { defaults.set(previous, forKey: ClipboardPrivacy.ignoreConcealedKey) }
+
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("klippy.tests.transient"))
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.declareTypes([.string, NSPasteboard.PasteboardType("org.nspasteboard.TransientType")], owner: nil)
+        pasteboard.setString("scratch", forType: .string)
+
+        XCTAssertTrue(ClipboardPrivacy.shouldSkip(pasteboard))
+    }
+
     // MARK: - Regressions found 2026-09-14
 
     /// A phone number has to be the whole clip, not a ten digit run inside it.
@@ -552,9 +632,6 @@ final class KlippyTests: XCTestCase {
     func testCategoryProperties() throws {
         for category in ContentCategory.allCases {
             XCTAssertFalse(category.displayName.isEmpty, "Category should have display name")
-            XCTAssertFalse(category.iconName.isEmpty, "Category should have icon name")
-            // Color property should not crash
-            _ = category.color
         }
     }
     
@@ -746,7 +823,31 @@ final class SettingsHonourTests: XCTestCase {
         UserDefaults.standard.removeObject(forKey: ClipboardPrivacy.ignoreConcealedKey)
         UserDefaults.standard.removeObject(forKey: LinkPreviewStore.enabledKey)
         UserDefaults.standard.removeObject(forKey: "klippy.feedback.hapticsEnabled")
+        UserDefaults.standard.removeObject(forKey: ClipboardManager.listLimitKey)
         super.tearDown()
+    }
+
+    /// The History list used to stop at a thousand clips no matter how many you
+    /// had, with no way to change it. The number is now the user's.
+    func testHistorySizeSettingIsWhatTheListActuallyUses() {
+        let manager = ClipboardManager.shared
+
+        UserDefaults.standard.removeObject(forKey: ClipboardManager.listLimitKey)
+        XCTAssertEqual(manager.listLimit, 1000, "unset means the old default")
+
+        UserDefaults.standard.set(200, forKey: ClipboardManager.listLimitKey)
+        XCTAssertEqual(manager.listFetchLimit, 200)
+
+        UserDefaults.standard.set(5000, forKey: ClipboardManager.listLimitKey)
+        XCTAssertEqual(manager.listFetchLimit, 5000)
+    }
+
+    /// "All" is stored as zero, which a fetch request would read as "none".
+    func testAllMeansEveryClipAndNotNone() {
+        UserDefaults.standard.set(0, forKey: ClipboardManager.listLimitKey)
+        XCTAssertEqual(ClipboardManager.shared.listLimit, 0)
+        XCTAssertGreaterThan(ClipboardManager.shared.listFetchLimit, 100_000,
+                             "zero must become a ceiling nobody reaches, not an empty list")
     }
 
     private func concealedBoard() -> NSPasteboard {
@@ -825,5 +926,181 @@ final class SettingsHonourTests: XCTestCase {
 
     func testAnUnknownSavedSkinFallsBackInsteadOfBreaking() {
         XCTAssertEqual(Skin.named("wheat").id, "dark", "a removed skin must fall back, not crash")
+    }
+}
+
+/// Using your own picture as the background.
+final class CustomSkinTests: XCTestCase {
+
+    private var scratch: URL!
+    /// These tests drive the real SkinStore, which writes to the real app
+    /// container. Without putting it back, running the suite would quietly
+    /// delete whatever picture the owner of the machine had chosen.
+    private var previousSkin: Skin!
+    private var previousImage: URL?
+
+    override func setUp() {
+        super.setUp()
+        scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("klippy-custom-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+
+        previousSkin = SkinStore.shared.skin
+        if let existing = SkinStore.shared.customImage,
+           let png = existing.tiffRepresentation
+            .flatMap(NSBitmapImageRep.init(data:))?
+            .representation(using: .png, properties: [:]) {
+            let backup = scratch.appendingPathComponent("previous-custom.png")
+            try? png.write(to: backup)
+            previousImage = backup
+        }
+    }
+
+    override func tearDown() {
+        SkinStore.shared.clearCustomImage()
+        if let previousImage { SkinStore.shared.setCustomImage(from: previousImage) }
+        SkinStore.shared.select(previousSkin)
+        try? FileManager.default.removeItem(at: scratch)
+        super.tearDown()
+    }
+
+    private func write(_ colour: NSColor, name: String,
+                       size: NSSize = NSSize(width: 60, height: 90)) -> URL {
+        let image = NSImage(size: size)
+        image.lockFocus(); colour.setFill()
+        NSRect(origin: .zero, size: size).fill(); image.unlockFocus()
+        let png = NSBitmapImageRep(data: image.tiffRepresentation!)!
+            .representation(using: .png, properties: [:])!
+        let url = scratch.appendingPathComponent("\(name).png")
+        try! png.write(to: url)
+        return url
+    }
+
+    /// Switching to a built-in skin and back used to land you on Dark, because
+    /// the built-in list has no "custom" entry to look up.
+    func testGoingBackToYourOwnPictureActuallyReturnsToIt() {
+        let store = SkinStore.shared
+        store.setCustomImage(from: write(.systemIndigo, name: "mine"))
+        let chosenScrim = store.skin.scrimTop
+
+        store.select(.meadow)
+        XCTAssertEqual(store.skin.id, "meadow")
+
+        store.select(store.customSkin)
+        XCTAssertEqual(store.skin.id, "custom", "must come back to the user's picture, not Dark")
+        XCTAssertTrue(store.skin.isCustom)
+        XCTAssertEqual(store.skin.scrimTop, chosenScrim, accuracy: 0.0001,
+                       "the wash measured off the picture must survive the round trip")
+    }
+
+    /// A photo off a phone is thousands of pixels across. Stored whole it is
+    /// read off disk and decoded at every launch to fill a 640 point panel.
+    func testAnOversizedPictureIsShrunkOnTheWayIn() {
+        let store = SkinStore.shared
+        let huge = NSSize(width: 3200, height: 2400)
+        XCTAssertTrue(store.setCustomImage(from: write(.systemOrange, name: "huge", size: huge)))
+
+        let stored = store.customImage
+        XCTAssertNotNil(stored)
+        let widest = max(stored!.size.width, stored!.size.height)
+        XCTAssertLessThanOrEqual(widest, 1600,
+                                 "a 3200px picture must not be kept at full size")
+        XCTAssertGreaterThan(widest, 1000, "shrinking must not leave a thumbnail")
+    }
+
+    /// Anything already small enough is left alone rather than resampled.
+    func testASmallPictureIsKeptAtItsOwnSize() {
+        let store = SkinStore.shared
+        store.setCustomImage(from: write(.systemGreen, name: "small",
+                                         size: NSSize(width: 800, height: 600)))
+        XCTAssertEqual(store.customImage?.size.width ?? 0, 800, accuracy: 1)
+    }
+
+    func testChoosingAPictureSelectsItAndNamesIt() {
+        let store = SkinStore.shared
+        XCTAssertTrue(store.setCustomImage(from: write(.systemTeal, name: "beach")))
+        XCTAssertTrue(store.hasCustomImage)
+        XCTAssertEqual(store.customName, "beach", "the swatch should be named after the file")
+        XCTAssertEqual(store.skin.id, "custom", "picking a picture must switch to it")
+        XCTAssertTrue(store.skin.isCustom)
+        XCTAssertTrue(store.skin.isImageBacked)
+    }
+
+    /// The wash over the picture is measured off the picture, not guessed, so
+    /// white text stays readable on a bright photo.
+    func testABrightPictureGetsAHeavierWashThanADarkOne() {
+        let store = SkinStore.shared
+        store.setCustomImage(from: write(.white, name: "bright"))
+        let bright = store.skin.scrimTop
+        store.setCustomImage(from: write(.black, name: "dark"))
+        let dark = store.skin.scrimTop
+        XCTAssertGreaterThan(bright, dark,
+                             "a white picture needs more wash than a black one")
+        XCTAssertLessThanOrEqual(bright, 0.72)
+        XCTAssertGreaterThanOrEqual(dark, 0.15)
+    }
+
+    func testRemovingThePictureFallsBackInsteadOfShowingNothing() {
+        let store = SkinStore.shared
+        store.setCustomImage(from: write(.systemPink, name: "pink"))
+        store.clearCustomImage()
+        XCTAssertFalse(store.hasCustomImage)
+        XCTAssertNil(store.customName)
+        XCTAssertEqual(store.skin.id, "dark", "must not leave the panel with no background")
+    }
+
+    func testAFileThatIsNotAPictureIsRefused() {
+        let url = scratch.appendingPathComponent("notes.png")
+        try! "this is not a picture".data(using: .utf8)!.write(to: url)
+        XCTAssertFalse(SkinStore.shared.setCustomImage(from: url))
+        XCTAssertFalse(SkinStore.shared.hasCustomImage)
+    }
+}
+
+/// The "never record" list. It exists because "Ignore password managers" only
+/// covers apps that mark their copies as concealed, and a tool that handles
+/// secrets but copies as plain text slips straight past it.
+final class ExclusionTests: XCTestCase {
+
+    private let store = ExclusionStore.shared
+
+    override func tearDown() {
+        for kind in ContentCategory.allCases { store.setExcluded(false, kind: kind) }
+        super.tearDown()
+    }
+
+    func testAKindCanBeExcluded() {
+        XCTAssertFalse(store.excludes(category: .paymentCard))
+        store.setExcluded(true, kind: .paymentCard)
+        XCTAssertTrue(store.excludes(category: .paymentCard))
+        XCTAssertFalse(store.excludes(category: .apiKey),
+                       "ticking one kind must not tick the others")
+    }
+
+    /// The choice has to survive a relaunch, which means it has to be in
+    /// UserDefaults rather than only in memory.
+    func testTheChoiceIsWrittenDown() {
+        store.setExcluded(true, kind: .apiKey)
+
+        let kinds = UserDefaults.standard.array(forKey: "klippy.privacy.excludedKinds") as? [Int] ?? []
+        XCTAssertTrue(kinds.contains(Int(ContentCategory.apiKey.rawValue)))
+    }
+
+    /// Switching everything off must not leave the app unable to record.
+    func testNothingIsExcludedByDefault() {
+        for kind in ContentCategory.allCases {
+            store.setExcluded(false, kind: kind)
+        }
+        XCTAssertTrue(ExclusionStore.offerable.allSatisfy { !store.excludes(category: $0) })
+    }
+
+    /// The list offered in Settings must not contain a kind that would switch
+    /// off most of the app, or one that is not a thing you copy.
+    func testTheOfferedKindsAreSane() {
+        XCTAssertFalse(ExclusionStore.offerable.contains(.all))
+        XCTAssertFalse(ExclusionStore.offerable.contains(.text))
+        XCTAssertFalse(ExclusionStore.offerable.contains(.merged))
+        XCTAssertTrue(ExclusionStore.offerable.contains(.paymentCard))
+        XCTAssertTrue(ExclusionStore.offerable.contains(.apiKey))
     }
 }

@@ -22,11 +22,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ClipboardManager.shared.startMonitoring()
             print("Klippy started — menu bar item installed, ⌃⌘V opens the panel")
 
-            // Runs once per launch, and does nothing unless the user opted in.
-            let days = UserDefaults.standard.integer(forKey: ClipboardManager.autoDeleteDaysKey)
-            if days > 0 {
-                ClipboardManager.shared.pruneUnusedClips(olderThanDays: days)
-            }
+            // Does nothing unless the user opted in, and no more than daily.
+            ClipboardManager.shared.runAutoDeleteIfDue()
         }
     }
 
